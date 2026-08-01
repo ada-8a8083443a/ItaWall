@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>赛博痛墙 - Cyber Ita Wall</title>
+  <link rel="stylesheet" href="css/style.css">
+  <!-- Three.js 本地库 -->
+  <script src="js/libs/three.min.js"></script>
+  <script src="js/libs/OrbitControls.js"></script>
+  <script src="js/libs/DragControls.js"></script>
+  <!-- html2canvas 截图库 -->
+  <script src="js/libs/html2canvas.min.js"></script>
+</head>
+<body>
+  <!-- 3D Canvas 容器 -->
+  <div id="scene-container"></div>
+
+  <!-- 顶部标题栏 -->
+  <header class="top-bar">
+    <div class="logo">
+      <span class="logo-icon">◆</span>
+      <span class="logo-text">赛博痛墙</span>
+      <span class="logo-sub">CYBER ITA WALL</span>
+    </div>
+    <div class="top-actions">
+      <button id="btn-reset-view" class="cyber-btn">重置视角</button>
+      <button id="btn-screenshot" class="cyber-btn primary">📸 拍照保存</button>
+    </div>
+  </header>
+
+  <!-- 左侧工具栏 -->
+  <aside class="toolbar left">
+    <div class="panel">
+      <h3 class="panel-title">添加物品</h3>
+      <div class="item-grid">
+        <button class="item-btn" data-type="badge" title="徽章">
+          <span class="item-icon">●</span>
+          <span class="item-label">徽章</span>
+        </button>
+        <button class="item-btn" data-type="polaroid" title="拍立得">
+          <span class="item-icon">▢</span>
+          <span class="item-label">拍立得</span>
+        </button>
+        <button class="item-btn" data-type="card" title="卡片">
+          <span class="item-icon">▭</span>
+          <span class="item-label">卡片</span>
+        </button>
+        <button class="item-btn" data-type="stand" title="立牌">
+          <span class="item-icon">△</span>
+          <span class="item-label">立牌</span>
+        </button>
+        <button class="item-btn" data-type="petal" title="花瓣">
+          <span class="item-icon">❀</span>
+          <span class="item-label">花瓣</span>
+        </button>
+        <button class="item-btn" data-type="star" title="星星">
+          <span class="item-icon">★</span>
+          <span class="item-label">星星</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3 class="panel-title">墙面设置</h3>
+      <div class="setting-row">
+        <label>墙面颜色</label>
+        <div class="color-picker">
+          <input type="color" id="wall-color" value="#1a0a2e">
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>金属边框</label>
+        <div class="color-picker">
+          <input type="color" id="frame-color" value="#ff00ff">
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>光线强度</label>
+        <input type="range" id="light-intensity" min="0.2" max="3" step="0.1" value="1.2">
+      </div>
+    </div>
+  </aside>
+
+  <!-- 右侧属性面板 -->
+  <aside class="toolbar right" id="property-panel" style="display:none;">
+    <div class="panel">
+      <h3 class="panel-title">物品属性</h3>
+      <div class="setting-row">
+        <label>替换图片</label>
+        <input type="file" id="upload-image" accept="image/*" class="file-input">
+      </div>
+      <div class="setting-row" id="color-setting">
+        <label>装饰颜色</label>
+        <div class="color-picker">
+          <input type="color" id="item-color" value="#ff6b9d">
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>大小</label>
+        <input type="range" id="item-scale" min="0.3" max="3" step="0.1" value="1">
+      </div>
+      <div class="setting-row">
+        <label>旋转</label>
+        <input type="range" id="item-rotation" min="-180" max="180" step="1" value="0">
+      </div>
+      <div class="btn-row">
+        <button id="btn-duplicate" class="cyber-btn small">复制</button>
+        <button id="btn-delete" class="cyber-btn small danger">删除</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 底部提示 -->
+  <footer class="bottom-bar">
+    <div class="hint">
+      <span class="hint-key">左键拖拽</span> 移动物品 ·
+      <span class="hint-key">右键拖拽</span> 旋转视角 ·
+      <span class="hint-key">滚轮</span> 缩放 ·
+      <span class="hint-key">点击物品</span> 编辑属性
+    </div>
+  </footer>
+
+  <!-- 截图预览弹窗 -->
+  <div id="screenshot-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h3>照片预览</h3>
+      <img id="screenshot-preview" alt="screenshot">
+      <div class="modal-actions">
+        <button id="btn-download" class="cyber-btn primary">下载照片</button>
+        <button id="btn-close-modal" class="cyber-btn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 加载动画 -->
+  <div id="loading" class="loading">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">正在加载赛博空间...</div>
+  </div>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

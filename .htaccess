@@ -1,0 +1,76 @@
+# ============================================
+# 赛博痛墙 - Apache .htaccess 配置
+# ============================================
+
+# 启用 MIME 类型
+AddType text/html .html
+AddType text/css .css
+AddType application/javascript .js
+AddType image/png .png
+AddType image/jpeg .jpg
+AddType image/jpeg .jpeg
+AddType image/svg+xml .svg
+AddType image/webp .webp
+AddType application/json .json
+
+# 默认字符集
+AddDefaultCharset UTF-8
+
+# ============================================
+# 缓存策略
+# ============================================
+
+# HTML: 不缓存（方便更新）
+<FilesMatch "\.(html)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+</FilesMatch>
+
+# CSS/JS: 缓存 1 小时
+<FilesMatch "\.(css|js)$">
+    Header set Cache-Control "public, max-age=3600"
+</FilesMatch>
+
+# 图片: 缓存 7 天
+<FilesMatch "\.(jpg|jpeg|png|gif|svg|webp|ico)$">
+    Header set Cache-Control "public, max-age=604800"
+</FilesMatch>
+
+# 字体: 缓存 30 天
+<FilesMatch "\.(woff|woff2|ttf|eot|otf)$">
+    Header set Cache-Control "public, max-age=2592000"
+</FilesMatch>
+
+# ============================================
+# 启用 Gzip 压缩
+# ============================================
+
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html
+    AddOutputFilterByType DEFLATE text/css
+    AddOutputFilterByType DEFLATE application/javascript
+    AddOutputFilterByType DEFLATE application/json
+    AddOutputFilterByType DEFLATE image/svg+xml
+    AddOutputFilterByType DEFLATE text/xml
+    AddOutputFilterByType DEFLATE application/xml
+</IfModule>
+
+# ============================================
+# 禁止目录列表
+# ============================================
+Options -Indexes
+
+# ============================================
+# 禁止访问敏感文件
+# ============================================
+<FilesMatch "^(\.htaccess|\.htpasswd|\.git|\.env|README\.md)$">
+    Require all denied
+</FilesMatch>
+
+# ============================================
+# CORS 配置（允许 CDN 资源）
+# ============================================
+<IfModule mod_headers.c>
+    Header set Access-Control-Allow-Origin "*"
+</IfModule>
