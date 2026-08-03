@@ -4,17 +4,25 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>赛博痛墙 - Cyber Ita Wall</title>
-  <link rel="stylesheet" href="css/style.css">
-  <!-- Three.js 本地库 -->
-  <script src="js/libs/three.min.js"></script>
-  <script src="js/libs/OrbitControls.js"></script>
-  <script src="js/libs/DragControls.js"></script>
+  <link rel="stylesheet" href="css/style.css?v=20260803">
   <!-- html2canvas 截图库 -->
   <script src="js/libs/html2canvas.min.js"></script>
+  <!-- 浏览器端抠图库（首次使用会下载 AI 模型 ~80MB） -->
+  <script type="module">
+    import { removeBackground, preload } from 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/+esm';
+    window.removeBackground = removeBackground;
+    window.bgRemovalPreload = preload;
+    window.bgRemovalReady = true;
+    document.dispatchEvent(new CustomEvent('bg-removal-ready'));
+  </script>
 </head>
 <body>
-  <!-- 3D Canvas 容器 -->
-  <div id="scene-container"></div>
+  <!-- 2D 洞洞板容器 -->
+  <div id="pegboard-container">
+    <div id="pegboard" class="pegboard">
+      <!-- 孔位由 JS 动态生成 -->
+    </div>
+  </div>
 
   <!-- 顶部标题栏 -->
   <header class="top-bar">
@@ -24,7 +32,9 @@
       <span class="logo-sub">CYBER ITA WALL</span>
     </div>
     <div class="top-actions">
-      <button id="btn-reset-view" class="cyber-btn">重置视角</button>
+      <button id="btn-import" class="cyber-btn">📥 导入布局</button>
+      <button id="btn-save" class="cyber-btn">💾 保存布局</button>
+      <button id="btn-reset-view" class="cyber-btn">重置布局</button>
       <button id="btn-screenshot" class="cyber-btn primary">📸 拍照保存</button>
     </div>
   </header>
@@ -58,27 +68,132 @@
           <span class="item-icon">★</span>
           <span class="item-label">星星</span>
         </button>
+        <button class="item-btn" id="btn-upload-item" title="上传照片作为物品">
+          <span class="item-icon">＋</span>
+          <span class="item-label">上传照片</span>
+        </button>
+      </div>
+      <input type="file" id="upload-item-file" accept="image/*" style="display:none;">
+    </div>
+
+    <div class="panel">
+      <h3 class="panel-title">洞洞板设置</h3>
+      <div class="setting-row">
+        <label>板身颜色</label>
+        <div class="color-picker">
+          <input type="color" id="board-color" value="#2d1b4e">
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>显示孔洞</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="holes-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row holes-settings">
+        <label>孔位颜色</label>
+        <div class="color-picker">
+          <input type="color" id="hole-color" value="#1a0a2e">
+        </div>
+      </div>
+      <div class="setting-row holes-settings">
+        <label>孔距</label>
+        <input type="range" id="hole-spacing" min="30" max="80" step="2" value="50">
+      </div>
+      <div class="setting-row">
+        <label>吸附开关</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="snap-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
       </div>
     </div>
 
     <div class="panel">
-      <h3 class="panel-title">墙面设置</h3>
+      <h3 class="panel-title">外框设置</h3>
       <div class="setting-row">
-        <label>墙面颜色</label>
+        <label>显示外框</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="frame-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row frame-settings">
+        <label>外框颜色</label>
         <div class="color-picker">
-          <input type="color" id="wall-color" value="#1a0a2e">
+          <input type="color" id="frame-color" value="#8b5cf6">
         </div>
       </div>
+      <div class="setting-row frame-settings">
+        <label>外框宽度</label>
+        <input type="range" id="frame-width" min="0" max="30" step="1" value="8">
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3 class="panel-title">光效设置</h3>
       <div class="setting-row">
-        <label>金属边框</label>
+        <label>启用光效</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="light-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row light-settings">
+        <label>光效预设</label>
+        <select id="light-preset" class="text-input">
+          <option value="cyberpunk">赛博朋克</option>
+          <option value="warm">暖色灯光</option>
+          <option value="cool">冷色灯光</option>
+          <option value="neon">霓虹夜</option>
+          <option value="sunset">黄昏落日</option>
+          <option value="natural">自然白光</option>
+          <option value="custom">自定义</option>
+        </select>
+      </div>
+      <div class="setting-row light-settings">
+        <label>亮度</label>
+        <input type="range" id="light-brightness" min="0.5" max="1.5" step="0.05" value="1">
+      </div>
+      <div class="setting-row light-settings">
+        <label>对比度</label>
+        <input type="range" id="light-contrast" min="0.5" max="2" step="0.05" value="1">
+      </div>
+      <div class="setting-row light-settings">
+        <label>饱和度</label>
+        <input type="range" id="light-saturate" min="0" max="2" step="0.05" value="1">
+      </div>
+      <div class="setting-row light-settings">
+        <label>主色调</label>
         <div class="color-picker">
-          <input type="color" id="frame-color" value="#ff00ff">
+          <input type="color" id="light-tint" value="#b300ff">
         </div>
       </div>
-      <div class="setting-row">
-        <label>光线强度</label>
-        <input type="range" id="light-intensity" min="0.2" max="3" step="0.1" value="1.2">
+      <div class="setting-row light-settings">
+        <label>色调强度</label>
+        <input type="range" id="light-tint-amount" min="0" max="1" step="0.05" value="0.15">
       </div>
+    </div>
+
+    <div class="panel">
+      <h3 class="panel-title">摄像头角度</h3>
+      <div class="setting-row">
+        <label>上下倾斜</label>
+        <input type="range" id="cam-rotatex" min="-45" max="45" step="1" value="0">
+      </div>
+      <div class="setting-row">
+        <label>左右旋转</label>
+        <input type="range" id="cam-rotatey" min="-45" max="45" step="1" value="0">
+      </div>
+      <div class="setting-row">
+        <label>整体缩放</label>
+        <input type="range" id="cam-zoom" min="0.5" max="2" step="0.05" value="1">
+      </div>
+      <div class="btn-row">
+        <button id="btn-reset-cam" class="cyber-btn small">重置视角</button>
+      </div>
+      <p class="camera-hint">提示：按住鼠标右键拖拽也可旋转视角</p>
     </div>
   </aside>
 
@@ -86,6 +201,17 @@
   <aside class="toolbar right" id="property-panel" style="display:none;">
     <div class="panel">
       <h3 class="panel-title">物品属性</h3>
+      <div class="setting-row">
+        <label>物品名称</label>
+        <input type="text" id="item-name" class="text-input" placeholder="给物品起个名字...">
+      </div>
+      <div class="setting-row">
+        <label>显示名称</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="name-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
       <div class="setting-row">
         <label>替换图片</label>
         <input type="file" id="upload-image" accept="image/*" class="file-input">
@@ -104,6 +230,31 @@
         <label>旋转</label>
         <input type="range" id="item-rotation" min="-180" max="180" step="1" value="0">
       </div>
+      <div class="setting-row">
+        <label>显示阴影</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="shadow-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row shadow-settings">
+        <label>阴影颜色</label>
+        <div class="color-picker">
+          <input type="color" id="shadow-color" value="#000000">
+        </div>
+      </div>
+      <div class="setting-row shadow-settings">
+        <label>阴影透明度</label>
+        <input type="range" id="shadow-opacity" min="0" max="1" step="0.05" value="0.7">
+      </div>
+      <div class="setting-row shadow-settings">
+        <label>阴影偏移Y</label>
+        <input type="range" id="shadow-offsety" min="-20" max="40" step="1" value="4">
+      </div>
+      <div class="setting-row shadow-settings">
+        <label>阴影模糊</label>
+        <input type="range" id="shadow-blur" min="0" max="50" step="1" value="12">
+      </div>
       <div class="btn-row">
         <button id="btn-duplicate" class="cyber-btn small">复制</button>
         <button id="btn-delete" class="cyber-btn small danger">删除</button>
@@ -114,10 +265,10 @@
   <!-- 底部提示 -->
   <footer class="bottom-bar">
     <div class="hint">
-      <span class="hint-key">左键拖拽</span> 移动物品 ·
-      <span class="hint-key">右键拖拽</span> 旋转视角 ·
-      <span class="hint-key">滚轮</span> 缩放 ·
-      <span class="hint-key">点击物品</span> 编辑属性
+      <span class="hint-key">左键拖拽</span> 移动物品（自动吸附孔位）·
+      <span class="hint-key">右键拖拽</span> 旋转摄像头视角 ·
+      <span class="hint-key">点击物品</span> 编辑属性 ·
+      <span class="hint-key">Delete</span> 删除选中
     </div>
   </footer>
 
@@ -133,12 +284,57 @@
     </div>
   </div>
 
+  <!-- 保存布局弹窗 -->
+  <div id="save-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h3>💾 保存布局</h3>
+      <div class="setting-row">
+        <label>布局名称</label>
+        <input type="text" id="save-name" class="text-input" placeholder="给这个布局起个名字...">
+      </div>
+      <div class="save-code-section" style="display:none;">
+        <p class="save-label">保存成功！分享码：</p>
+        <div class="save-code-display">
+          <span id="save-code-text">----------------</span>
+          <button id="btn-copy-code" class="cyber-btn small">复制</button>
+        </div>
+        <p class="save-hint">将此码分享给他人，即可导入相同布局</p>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-confirm-save" class="cyber-btn primary">生成分享码</button>
+        <button id="btn-close-save" class="cyber-btn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导入布局弹窗 -->
+  <div id="import-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h3>📥 导入布局</h3>
+      <div class="setting-row">
+        <label>分享码</label>
+        <input type="text" id="import-code" class="text-input" placeholder="输入16位分享码..." maxlength="16">
+      </div>
+      <div id="import-error" class="import-error" style="display:none; color: #ff6b6b; font-size: 12px; margin-bottom: 12px;">分享码无效或已过期</div>
+      <div class="save-saves-section">
+        <p class="save-label">我的保存记录：</p>
+        <div id="saves-list" class="saves-list">
+          <p class="save-hint">暂无保存记录</p>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-confirm-import" class="cyber-btn primary">导入布局</button>
+        <button id="btn-close-import" class="cyber-btn">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 加载动画 -->
   <div id="loading" class="loading">
     <div class="loading-spinner"></div>
     <div class="loading-text">正在加载赛博空间...</div>
   </div>
 
-  <script src="js/main.js"></script>
+  <script src="js/main.js?v=20260803"></script>
 </body>
 </html>

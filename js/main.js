@@ -1,1724 +1,1542 @@
-/* ========================================
- *  赛博痛墙 - Cyber Ita Wall
- *  基于 Three.js 的3D痛墙装扮系统
- * ======================================== */
+// ===== 赛博痛墙 - 2D 洞洞板系统 =====
+(function() {
+  'use strict';
 
-// ===== 全局错误捕获（把错误显示到页面上） =====
-window.addEventListener('error', function(e) {
-  showError('错误: ' + e.message + '\n位置: ' + e.filename + ':' + e.lineno);
-});
-window.addEventListener('unhandledrejection', function(e) {
-  showError('Promise错误: ' + e.reason);
-});
-
-function showError(msg) {
-  console.error(msg);
-  var loading = document.getElementById('loading');
-  if (loading) {
-    loading.innerHTML = '<div style="color:#ff5050;font-size:16px;text-align:center;max-width:500px;padding:20px;">' +
-      '<div style="font-size:40px;margin-bottom:10px;">⚠️</div>' +
-      '<div style="margin-bottom:10px;">页面加载出错了</div>' +
-      '<div style="font-size:12px;opacity:0.8;white-space:pre-wrap;text-align:left;">' + msg + '</div>' +
-      '</div>';
-  }
-}
-
-// 标记拖拽状态
-let _isDraggingNow = false;
-let OrbitControls, DragControls;
-
-// ===== 全局变量 =====
-let scene, camera, renderer;
-let orbitControls, dragControls;
-let wall, frameGroup;
-let decorations = [];
-let selectedObject = null;
-let raycaster, mouse;
-let mainLight, fillLight, rimLight, ambientLight;
-let itemCounter = 0;
-let maxAnisotropy = 1;
-
-// 墙面配置
-const WALL_CONFIG = {
-  width: 16,
-  height: 10,
-  color: 0x1a0a2e,
-  frameColor: 0xff00ff
-};
-
-// 物品类型定义
-const ITEM_TYPES = {
-  badge: {
-    name: '徽章',
-    width: 1.2,
-    height: 1.2,
-    depth: 0.08,
-    hasImage: true,
-    shape: 'circle',
-    defaultColor: 0xff6b9d
-  },
-  polaroid: {
-    name: '拍立得',
-    width: 1.8,
-    height: 2.2,
-    depth: 0.06,
-    hasImage: true,
-    shape: 'polaroid',
-    defaultColor: 0xffffff
-  },
-  card: {
-    name: '卡片',
-    width: 1.6,
-    height: 2.4,
-    depth: 0.05,
-    hasImage: true,
-    shape: 'rect',
-    defaultColor: 0x4fc3f7
-  },
-  stand: {
-    name: '立牌',
-    width: 1.4,
-    height: 2.0,
-    depth: 0.1,
-    hasImage: true,
-    shape: 'stand',
-    defaultColor: 0xffd54f
-  },
-  petal: {
-    name: '花瓣',
-    width: 0.6,
-    height: 0.6,
-    depth: 0.02,
-    hasImage: false,
-    shape: 'petal',
-    defaultColor: 0xffb6c1
-  },
-  star: {
-    name: '星星',
-    width: 0.8,
-    height: 0.8,
-    depth: 0.04,
-    hasImage: false,
-    shape: 'star',
-    defaultColor: 0xffeb3b
-  }
-};
-
-// ===== 初始化 =====
-function init() {
-  try {
-    // ===== 1. 检查 THREE.js 是否加载成功 =====
-    if (typeof THREE === 'undefined') {
-      throw new Error('THREE.js 未加载，请检查 js/libs/three.min.js 是否存在');
-    }
-    console.log('✅ THREE.js 已加载, 版本:', THREE.REVISION);
-
-    // ===== 2. 检查扩展控件 =====
-    if (typeof THREE.OrbitControls === 'undefined') {
-      throw new Error('OrbitControls 未加载，请检查 js/libs/OrbitControls.js');
-    }
-    if (typeof THREE.DragControls === 'undefined') {
-      throw new Error('DragControls 未加载，请检查 js/libs/DragControls.js');
-    }
-    OrbitControls = THREE.OrbitControls;
-    DragControls = THREE.DragControls;
-    console.log('✅ 扩展控件已加载');
-
-    // ===== 3. 检查 WebGL 支持 =====
-    var testCanvas = document.createElement('canvas');
-    var gl = testCanvas.getContext('webgl') || testCanvas.getContext('experimental-webgl');
-    if (!gl) {
-      throw new Error('你的浏览器不支持 WebGL，请更换 Chrome/Edge/Firefox 最新版');
-    }
-    console.log('✅ WebGL 支持正常');
-
-    // 场景
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0015);
-    scene.fog = new THREE.Fog(0x0a0015, 20, 50);
-
-    // 相机
-    camera = new THREE.PerspectiveCamera(
-      50,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      1000
-    );
-    camera.position.set(0, 0, 14);
-
-    // 渲染器
-    const container = document.getElementById('scene-container');
-    renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      preserveDrawingBuffer: true,
-      alpha: true
-    });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 3));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.ReinhardToneMapping;
-    renderer.toneMappingExposure = 1.2;
-    if (renderer.outputColorSpace !== undefined) {
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-    } else if (renderer.outputEncoding !== undefined) {
-      renderer.outputEncoding = THREE.sRGBEncoding;
-    }
-    container.appendChild(renderer.domElement);
-    maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
-    console.log('✅ 渲染器初始化完成, 最大各向异性:', maxAnisotropy);
-
-    // 射线检测
-    raycaster = new THREE.Raycaster();
-    mouse = new THREE.Vector2();
-
-    // 创建墙面
-    createWall();
-
-    // 创建光照
-    createLights();
-
-    // 创建装饰边框
-    createFrame();
-
-    // 控制器
-    setupControls();
-
-    // 事件监听
-    setupEventListeners();
-
-    // 默认添加一些示例物品
-    addDefaultItems();
-    console.log('✅ 场景初始化完成，物品数:', decorations.length);
-
-    // 动画循环
-    animate();
-
-    // 隐藏加载动画
-    setTimeout(() => {
-      const loading = document.getElementById('loading');
-      if (loading) {
-        loading.classList.add('hidden');
-        setTimeout(() => { if (loading) loading.style.display = 'none'; }, 500);
-      }
-    }, 500);
-
-  } catch (err) {
-    console.error('❌ 初始化失败:', err);
-    showError(err.message || String(err));
-  }
-}
-
-// ===== 创建墙面 =====
-function createWall() {
-  // 主墙面
-  const wallGeometry = new THREE.BoxGeometry(
-    WALL_CONFIG.width,
-    WALL_CONFIG.height,
-    0.3
-  );
-  const wallMaterial = new THREE.MeshStandardMaterial({
-    color: WALL_CONFIG.color,
-    roughness: 0.7,
-    metalness: 0.1
-  });
-  wall = new THREE.Mesh(wallGeometry, wallMaterial);
-  wall.position.z = -0.15;
-  wall.receiveShadow = true;
-  wall.name = 'wall';
-  scene.add(wall);
-
-  // 墙面纹理细节（赛博网格线）
-  const gridHelper = new THREE.GridHelper(
-    WALL_CONFIG.width,
-    16,
-    0xff00ff,
-    0x330066
-  );
-  gridHelper.rotation.x = Math.PI / 2;
-  gridHelper.position.z = 0.001;
-  gridHelper.material.opacity = 0.15;
-  gridHelper.material.transparent = true;
-  scene.add(gridHelper);
-}
-
-// ===== 创建边框 =====
-function createFrame() {
-  frameGroup = new THREE.Group();
-  const frameThickness = 0.2;
-  const frameDepth = 0.4;
-  const hw = WALL_CONFIG.width / 2 + frameThickness / 2;
-  const hh = WALL_CONFIG.height / 2 + frameThickness / 2;
-
-  const frameMaterial = new THREE.MeshStandardMaterial({
-    color: WALL_CONFIG.frameColor,
-    roughness: 0.3,
-    metalness: 0.8,
-    emissive: WALL_CONFIG.frameColor,
-    emissiveIntensity: 0.3
-  });
-
-  // 四个边框
-  const framePositions = [
-    { w: WALL_CONFIG.width + frameThickness * 2, h: frameThickness, x: 0, y: hh },
-    { w: WALL_CONFIG.width + frameThickness * 2, h: frameThickness, x: 0, y: -hh },
-    { w: frameThickness, h: WALL_CONFIG.height, x: -hw, y: 0 },
-    { w: frameThickness, h: WALL_CONFIG.height, x: hw, y: 0 }
-  ];
-
-  framePositions.forEach(fp => {
-    const geo = new THREE.BoxGeometry(fp.w, fp.h, frameDepth);
-    const mesh = new THREE.Mesh(geo, frameMaterial);
-    mesh.position.set(fp.x, fp.y, 0);
-    mesh.castShadow = true;
-    frameGroup.add(mesh);
-  });
-
-  // 四角装饰
-  const cornerSize = 0.5;
-  const corners = [
-    { x: -hw, y: hh },
-    { x: hw, y: hh },
-    { x: -hw, y: -hh },
-    { x: hw, y: -hh }
-  ];
-  corners.forEach(c => {
-    const cornerGeo = new THREE.SphereGeometry(cornerSize * 0.4, 16, 16);
-    const corner = new THREE.Mesh(cornerGeo, frameMaterial);
-    corner.position.set(c.x, c.y, 0.1);
-    corner.castShadow = true;
-    frameGroup.add(corner);
-  });
-
-  scene.add(frameGroup);
-}
-
-// ===== 创建光照 =====
-function createLights() {
-  // 环境光
-  ambientLight = new THREE.AmbientLight(0x404080, 0.4);
-  scene.add(ambientLight);
-
-  // 主光源（暖白光，模拟台灯）
-  mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
-  mainLight.position.set(5, 8, 10);
-  mainLight.castShadow = true;
-  mainLight.shadow.mapSize.width = 2048;
-  mainLight.shadow.mapSize.height = 2048;
-  mainLight.shadow.camera.near = 0.5;
-  mainLight.shadow.camera.far = 50;
-  mainLight.shadow.camera.left = -15;
-  mainLight.shadow.camera.right = 15;
-  mainLight.shadow.camera.top = 15;
-  mainLight.shadow.camera.bottom = -15;
-  mainLight.shadow.bias = -0.0001;
-  scene.add(mainLight);
-
-  // 补光（粉紫色，赛博感）
-  fillLight = new THREE.PointLight(0xff00ff, 0.8, 30);
-  fillLight.position.set(-6, 3, 5);
-  scene.add(fillLight);
-
-  // 轮廓光（青蓝色）
-  rimLight = new THREE.PointLight(0x00f0ff, 0.6, 30);
-  rimLight.position.set(6, -3, 5);
-  scene.add(rimLight);
-}
-
-// ===== 控制器 =====
-function setupControls() {
-  // 轨道控制（视角调节）
-  orbitControls = new OrbitControls(camera, renderer.domElement);
-  orbitControls.enableDamping = true;
-  orbitControls.dampingFactor = 0.08;
-  orbitControls.enablePan = false;
-  orbitControls.minDistance = 6;
-  orbitControls.maxDistance = 25;
-  orbitControls.maxPolarAngle = Math.PI * 0.6;
-  orbitControls.minPolarAngle = Math.PI * 0.3;
-  orbitControls.target.set(0, 0, 0);
-  orbitControls.mouseButtons = {
-    LEFT: null,
-    MIDDLE: THREE.MOUSE.DOLLY,
-    RIGHT: THREE.MOUSE.ROTATE
+  // ========== 配置 ==========
+  const CONFIG = {
+    board: {
+      width: 800,
+      height: 600,
+      minWidth: 400,
+      minHeight: 300
+    },
+    holeSpacing: 50,
+    holeDiameter: 12,
+    snapEnabled: true,
+    snapThreshold: 20
   };
 
-  // 拖拽控制
-  dragControls = new DragControls([], camera, renderer.domElement);
-  dragControls.enabled = true;
+  // 物品配置
+  const ITEM_CONFIG = {
+    badge:    { width: 80,  height: 80,  hasImage: true,  defaultColor: '#ff6b9d' },
+    polaroid: { width: 100, height: 130, hasImage: true,  defaultColor: '#f5f0e6' },
+    card:     { width: 90,  height: 135, hasImage: true,  defaultColor: '#4fc3f7' },
+    stand:    { width: 90,  height: 130, hasImage: true,  defaultColor: '#ffd54f' },
+    petal:    { width: 40,  height: 40,  hasImage: false, defaultColor: '#ff80ab' },
+    star:     { width: 40,  height: 40,  hasImage: false, defaultColor: '#ffeb3b' },
+    custom:   { width: 110, height: 110, hasImage: true,  defaultColor: '#ffffff', isCustom: true }
+  };
 
-  dragControls.addEventListener('dragstart', function(event) {
-    _isDraggingNow = true;
-    orbitControls.enabled = false;
-    selectedObject = event.object;
-    updatePropertyPanel(selectedObject);
-    highlightObject(selectedObject);
-  });
+  // ========== 状态 ==========
+  const state = {
+    items: [],
+    selectedItem: null,
+    dragging: null,
+    dragOffset: { x: 0, y: 0 },
+    holePositions: [],
+    nextId: 1,
+    boardColor: '#2d1b4e',
+    holeColor: '#1a0a2e',
+    showHoles: true,
+    frame: {
+      enabled: true,
+      color: '#8b5cf6',
+      width: 8
+    },
+    camera: {
+      rotateX: 0,
+      rotateY: 0,
+      zoom: 1
+    },
+    cameraDragging: null,
+    lighting: {
+      enabled: true,
+      preset: 'cyberpunk',
+      brightness: 1,
+      contrast: 1,
+      saturate: 1,
+      tint: '#b300ff',
+      tintAmount: 0.15
+    }
+  };
 
-  dragControls.addEventListener('drag', function(event) {
-    const obj = event.object;
-    // 限制在墙面范围内
-    const hw = WALL_CONFIG.width / 2 - 1;
-    const hh = WALL_CONFIG.height / 2 - 1;
-    obj.position.x = Math.max(-hw, Math.min(hw, obj.position.x));
-    obj.position.y = Math.max(-hh, Math.min(hh, obj.position.y));
-    obj.position.z = 0.1 + (obj.userData.depth || 0.05);
-  });
+  // 光效预设配置
+  const LIGHT_PRESETS = {
+    cyberpunk: { brightness: 1.05, contrast: 1.15, saturate: 1.2, tint: '#b300ff', tintAmount: 0.2 },
+    warm:      { brightness: 1.1,  contrast: 1.05, saturate: 1.1, tint: '#ff9500', tintAmount: 0.2 },
+    cool:      { brightness: 1.05, contrast: 1.1,  saturate: 0.95,tint: '#00aaff', tintAmount: 0.15 },
+    neon:      { brightness: 1.15, contrast: 1.3,  saturate: 1.5, tint: '#ff00ff', tintAmount: 0.25 },
+    sunset:    { brightness: 1.1,  contrast: 1.1,  saturate: 1.2, tint: '#ff6b35', tintAmount: 0.25 },
+    natural:   { brightness: 1,    contrast: 1,     saturate: 1,    tint: '#ffffff', tintAmount: 0 }
+  };
 
-  dragControls.addEventListener('dragend', function(event) {
-    _isDraggingNow = false;
-    orbitControls.enabled = true;
-  });
-}
+  // ========== DOM 引用 ==========
+  const $ = (id) => document.getElementById(id);
+  const pegboard = $('pegboard');
+  const propertyPanel = $('property-panel');
 
-// ===== 高亮选中物体 =====
-function highlightObject(obj) {
-  decorations.forEach(d => {
-    if (d.userData.originalEmissive !== undefined) {
-      d.traverse(child => {
-        if (child.isMesh && child.material) {
-          // 有图片的物品不通过修改 emissive 来高亮（避免破坏图片显示）
-          if (child.userData.isImage) return;
-          if (child.material.emissive) {
-            child.material.emissive.setHex(child.userData.originalEmissive || 0x000000);
-            child.material.emissiveIntensity = child.userData.originalEmissiveIntensity || 0;
-          }
-        }
+  // ========== 工具函数 ==========
+  function uid() { return 'item_' + (state.nextId++); }
+
+  function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
+
+  function toRgb(hex) {
+    const n = parseInt(hex.replace('#', ''), 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  // ========== 洞洞板初始化 ==========
+  function initPegboard() {
+    updateBoardSize();
+    generateHoles();
+    window.addEventListener('resize', () => {
+      updateBoardSize();
+      generateHoles();
+    });
+  }
+
+  function updateBoardSize() {
+    const margin = 320;
+    const w = clamp(window.innerWidth - margin, CONFIG.board.minWidth, 1400);
+    const h = clamp(window.innerHeight - 200, CONFIG.board.minHeight, 900);
+    pegboard.style.width = w + 'px';
+    pegboard.style.height = h + 'px';
+    CONFIG.board.width = w;
+    CONFIG.board.height = h;
+  }
+
+  function generateHoles() {
+    // 清除旧孔位
+    pegboard.querySelectorAll('.pegboard-hole').forEach(el => el.remove());
+    state.holePositions = [];
+
+    const spacing = CONFIG.holeSpacing;
+    const startX = spacing;
+    const startY = spacing;
+    const endX = CONFIG.board.width - spacing;
+    const endY = CONFIG.board.height - spacing;
+
+    for (let y = startY; y <= endY; y += spacing) {
+      for (let x = startX; x <= endX; x += spacing) {
+        state.holePositions.push({ x, y });
+        const hole = document.createElement('div');
+        hole.className = 'pegboard-hole';
+        hole.style.left = x + 'px';
+        hole.style.top = y + 'px';
+        hole.dataset.x = x;
+        hole.dataset.y = y;
+        pegboard.appendChild(hole);
+      }
+    }
+  }
+
+  // ========== 摄像头控制 ==========
+  function updateCameraTransform() {
+    const { rotateX, rotateY, zoom } = state.camera;
+    pegboard.style.transform = `
+      rotateX(${rotateX}deg)
+      rotateY(${rotateY}deg)
+      scale(${zoom})
+    `;
+  }
+
+  function setCameraRotateX(deg) {
+    state.camera.rotateX = clamp(deg, -45, 45);
+    updateCameraTransform();
+  }
+
+  function setCameraRotateY(deg) {
+    state.camera.rotateY = clamp(deg, -45, 45);
+    updateCameraTransform();
+  }
+
+  function setCameraZoom(z) {
+    state.camera.zoom = clamp(z, 0.5, 2);
+    updateCameraTransform();
+  }
+
+  function resetCamera() {
+    state.camera.rotateX = 0;
+    state.camera.rotateY = 0;
+    state.camera.zoom = 1;
+    $('cam-rotatex').value = 0;
+    $('cam-rotatey').value = 0;
+    $('cam-zoom').value = 1;
+    updateCameraTransform();
+  }
+
+  // ========== 光效控制 ==========
+  function applyLighting() {
+    const l = state.lighting;
+    if (!l.enabled) {
+      pegboard.style.filter = '';
+      const overlay = pegboard.querySelector('.pegboard-lighting-overlay');
+      if (overlay) overlay.remove();
+      return;
+    }
+
+    // 基础滤镜（亮度、对比度、饱和度）
+    pegboard.style.filter = `
+      brightness(${l.brightness})
+      contrast(${l.contrast})
+      saturate(${l.saturate})
+    `;
+
+    // 色调叠加
+    let overlay = pegboard.querySelector('.pegboard-lighting-overlay');
+    if (l.tintAmount > 0 && l.tint) {
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'pegboard-lighting-overlay';
+        pegboard.appendChild(overlay);
+      }
+      const rgb = toRgb(l.tint);
+      overlay.style.background = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${l.tintAmount})`;
+      overlay.style.opacity = '1';
+    } else if (overlay) {
+      overlay.remove();
+    }
+  }
+
+  function setLightPreset(preset) {
+    state.lighting.preset = preset;
+    if (preset !== 'custom' && LIGHT_PRESETS[preset]) {
+      const p = LIGHT_PRESETS[preset];
+      state.lighting.brightness = p.brightness;
+      state.lighting.contrast = p.contrast;
+      state.lighting.saturate = p.saturate;
+      state.lighting.tint = p.tint;
+      state.lighting.tintAmount = p.tintAmount;
+      // 同步 UI
+      $('light-brightness').value = p.brightness;
+      $('light-contrast').value = p.contrast;
+      $('light-saturate').value = p.saturate;
+      $('light-tint').value = p.tint;
+      $('light-tint-amount').value = p.tintAmount;
+    }
+    applyLighting();
+  }
+
+  function setLightEnabled(enabled) {
+    state.lighting.enabled = enabled;
+    // 显示/隐藏子设置
+    document.querySelectorAll('.setting-row.light-settings').forEach(el => {
+      el.classList.toggle('hidden', !enabled);
+    });
+    applyLighting();
+  }
+
+  function setLightBrightness(v) { state.lighting.brightness = parseFloat(v); state.lighting.preset = 'custom'; $('light-preset').value = 'custom'; applyLighting(); }
+  function setLightContrast(v)   { state.lighting.contrast = parseFloat(v);   state.lighting.preset = 'custom'; $('light-preset').value = 'custom'; applyLighting(); }
+  function setLightSaturate(v)   { state.lighting.saturate = parseFloat(v);   state.lighting.preset = 'custom'; $('light-preset').value = 'custom'; applyLighting(); }
+  function setLightTint(v)       { state.lighting.tint = v;                    state.lighting.preset = 'custom'; $('light-preset').value = 'custom'; applyLighting(); }
+  function setLightTintAmount(v) { state.lighting.tintAmount = parseFloat(v);  state.lighting.preset = 'custom'; $('light-preset').value = 'custom'; applyLighting(); }
+
+  // ========== 吸附功能 ==========
+  function findNearestHole(x, y) {
+    let nearest = null;
+    let minDist = Infinity;
+    for (const hole of state.holePositions) {
+      const d = Math.hypot(hole.x - x, hole.y - y);
+      if (d < minDist) {
+        minDist = d;
+        nearest = hole;
+      }
+    }
+    return { hole: nearest, distance: minDist };
+  }
+
+  function snapToHole(x, y) {
+    if (!CONFIG.snapEnabled) return { x, y };
+    const { hole, distance } = findNearestHole(x, y);
+    if (hole && distance <= CONFIG.snapThreshold) {
+      return { x: hole.x, y: hole.y, snapped: true, hole };
+    }
+    return { x, y };
+  }
+
+  function showSnapHint(hole) {
+    clearSnapHints();
+    if (!hole) return;
+    const el = pegboard.querySelector(`.pegboard-hole[data-x="${hole.x}"][data-y="${hole.y}"]`);
+    if (el) el.classList.add('snap-hint');
+  }
+
+  function clearSnapHints() {
+    pegboard.querySelectorAll('.pegboard-hole.snap-hint').forEach(el => {
+      el.classList.remove('snap-hint');
+    });
+  }
+
+  // ========== 抠图处理 ==========
+  function showBgRemovalProgress() {
+    if (document.querySelector('.bg-removal-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'bg-removal-overlay';
+    overlay.innerHTML = `
+      <div class="bg-removal-modal">
+        <h3>✂️ AI 智能抠图中</h3>
+        <div class="status" id="bg-removal-status">正在初始化 AI 引擎...</div>
+        <div class="bg-removal-progress">
+          <div class="bg-removal-progress-bar" id="bg-removal-bar"></div>
+        </div>
+        <div class="bg-removal-percent" id="bg-removal-percent">0%</div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  function updateBgRemovalProgress(percent, status) {
+    const bar = document.getElementById('bg-removal-bar');
+    const pct = document.getElementById('bg-removal-percent');
+    const st = document.getElementById('bg-removal-status');
+    if (bar) bar.style.width = percent + '%';
+    if (pct) pct.textContent = Math.round(percent) + '%';
+    if (st && status) st.textContent = status;
+  }
+
+  function hideBgRemovalProgress() {
+    document.querySelectorAll('.bg-removal-overlay').forEach(el => el.remove());
+  }
+
+  async function removeBgFromImage(imageSrc) {
+    // 等待抠图库加载完成
+    if (!window.removeBackground) {
+      updateBgRemovalProgress(5, '正在加载 AI 抠图引擎...');
+      await new Promise((resolve) => {
+        if (window.removeBackground) return resolve();
+        document.addEventListener('bg-removal-ready', resolve, { once: true });
+        setTimeout(resolve, 15000); // 最多等 15 秒
       });
     }
-  });
 
-  if (obj) {
-    obj.traverse(child => {
-      if (child.isMesh && child.material) {
-        // 有图片的物品不通过修改 emissive 来高亮（避免破坏图片显示）
-        if (child.userData.isImage) return;
-        if (child.material.emissive) {
-          child.userData.originalEmissive = child.material.emissive.getHex();
-          child.userData.originalEmissiveIntensity = child.material.emissiveIntensity;
-          child.material.emissive.setHex(0x00f0ff);
-          child.material.emissiveIntensity = 0.5;
-        }
+    if (!window.removeBackground) {
+      throw new Error('AI 抠图引擎加载失败，请刷新页面重试');
+    }
+
+    updateBgRemovalProgress(10, '正在下载 AI 模型（首次使用约 80MB）...');
+
+    const resultBlob = await window.removeBackground(imageSrc, {
+      progress: (key, current, total) => {
+        const pct = total > 0 ? (current / total) * 100 : 0;
+        // 模型下载阶段占 10-60%
+        const downloadPct = 10 + (pct * 0.5);
+        updateBgRemovalProgress(downloadPct, `正在加载 ${key}...`);
+      },
+      output: {
+        format: 'image/png',
+        type: 'foreground'
       }
     });
-  }
-}
 
-// ===== 创建物品 =====
-function createDecoration(type, options = {}) {
-  const config = ITEM_TYPES[type];
-  if (!config) return null;
+    updateBgRemovalProgress(70, '正在进行 AI 智能抠图...');
 
-  itemCounter++;
-  const group = new THREE.Group();
-  group.userData = {
-    type: type,
-    id: 'item_' + itemCounter,
-    depth: config.depth,
-    baseScale: 1,
-    color: config.defaultColor,
-    hasImage: config.hasImage
-  };
+    // 转换为 dataURL
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(resultBlob);
+    });
 
-  let mainMesh;
-
-  switch (config.shape) {
-    case 'circle':
-      mainMesh = createBadge(config, options);
-      break;
-    case 'polaroid':
-      mainMesh = createPolaroid(config, options);
-      break;
-    case 'rect':
-      mainMesh = createCard(config, options);
-      break;
-    case 'stand':
-      mainMesh = createStand(config, options);
-      break;
-    case 'petal':
-      mainMesh = createPetal(config, options);
-      break;
-    case 'star':
-      mainMesh = createStar(config, options);
-      break;
-    default:
-      mainMesh = createCard(config, options);
+    updateBgRemovalProgress(100, '抠图完成！');
+    return dataUrl;
   }
 
-  group.add(mainMesh);
+  // ========== 创建物品 ==========
+  function createItem(type, options = {}) {
+    const cfg = ITEM_CONFIG[type];
+    if (!cfg) return null;
 
-  // 随机位置
-  if (options.position) {
-    group.position.copy(options.position);
-  } else {
-    group.position.x = (Math.random() - 0.5) * (WALL_CONFIG.width - 3);
-    group.position.y = (Math.random() - 0.5) * (WALL_CONFIG.height - 3);
-  }
-  group.position.z = 0.1 + config.depth;
-
-  // 随机轻微旋转
-  if (options.rotation !== undefined) {
-    group.rotation.z = options.rotation;
-  } else {
-    group.rotation.z = (Math.random() - 0.5) * 0.2;
-  }
-
-  scene.add(group);
-  decorations.push(group);
-  updateDragControls();
-
-  return group;
-}
-
-// ========== 合成徽章贴图（单张Canvas，不拼接）高分辨率版本 ==========
-function composeBadgeTexture(imageUrl) {
-  const SIZE = 2048;  // 提高到 2K 分辨率
-  const canvas = document.createElement('canvas');
-  canvas.width = SIZE;
-  canvas.height = SIZE;
-  const ctx = canvas.getContext('2d');
-  // 开启高质量图像渲染
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-
-  // 1. 画圆角方形白底（整体徽章）
-  const cornerR = SIZE * 0.18;
-  ctx.fillStyle = '#ffffff';
-  roundRect(ctx, 0, 0, SIZE, SIZE, cornerR);
-  ctx.fill();
-
-  // 2. 如果有用户图片，画在中间（保持原比例，不蒙任何颜色）
-  const texture = new THREE.CanvasTexture(canvas);
-  if (texture.colorSpace !== undefined) {
-    texture.colorSpace = THREE.SRGBColorSpace;
-  } else {
-    texture.encoding = THREE.sRGBEncoding;
-  }
-  // 高质量纹理过滤设置 - 开启 mipmap 提升缩小质量
-  texture.magFilter = THREE.LinearFilter;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.generateMipmaps = true;
-  texture.anisotropy = Math.max(maxAnisotropy, 8);
-  texture.needsUpdate = true;
-
-  if (imageUrl) {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = function() {
-      // 清空并重新画白底
-      ctx.clearRect(0, 0, SIZE, SIZE);
-      ctx.fillStyle = '#ffffff';
-      roundRect(ctx, 0, 0, SIZE, SIZE, cornerR);
-      ctx.fill();
-
-      // 计算图片居中绘制的位置（保持比例）
-      const padding = SIZE * 0.1;
-      const drawW = SIZE - padding * 2;
-      const drawH = SIZE - padding * 2;
-      const imgRatio = img.width / img.height;
-      const drawRatio = drawW / drawH;
-      let sx, sy, sw, sh;
-      if (imgRatio > drawRatio) {
-        // 图片更宽，裁两边
-        sw = img.height * drawRatio;
-        sh = img.height;
-        sx = (img.width - sw) / 2;
-        sy = 0;
-      } else {
-        // 图片更高，裁上下
-        sw = img.width;
-        sh = img.width / drawRatio;
-        sx = 0;
-        sy = (img.height - sh) / 2;
-      }
-
-      // 保存上下文，裁剪成圆角方形区域（只在徽章区域内画图）
-      ctx.save();
-      ctx.beginPath();
-      roundRectPath(ctx, padding, padding, drawW, drawH, cornerR * 0.5);
-      ctx.clip();
-      // 直接 drawImage，不叠加任何颜色滤镜
-      ctx.drawImage(img, sx, sy, sw, sh, padding, padding, drawW, drawH);
-      ctx.restore();
-
-      // 标记纹理需要更新，并强制重新生成 mipmaps
-      texture.needsUpdate = true;
-      if (texture.minFilter === THREE.LinearMipmapLinearFilter ||
-          texture.minFilter === THREE.LinearMipmapNearestFilter ||
-          texture.minFilter === THREE.NearestMipmapLinearFilter ||
-          texture.minFilter === THREE.NearestMipmapNearestFilter) {
-        texture.generateMipmaps = true;
-      }
+    const id = uid();
+    const itemData = {
+      id,
+      type,
+      x: options.x || (CONFIG.board.width / 2),
+      y: options.y || (CONFIG.board.height / 2),
+      scale: options.scale || 1,
+      rotation: options.rotation || 0,
+      color: options.color || cfg.defaultColor,
+      imageUrl: options.imageUrl || null,
+      name: options.name || '',
+      showName: options.showName !== undefined ? options.showName : true,
+      shadow: {
+        enabled: options.shadow?.enabled !== undefined ? options.shadow.enabled : true,
+        offsetX: options.shadow?.offsetX || 0,
+        offsetY: options.shadow?.offsetY || 4,
+        blur: options.shadow?.blur || 12,
+        spread: options.shadow?.spread || 0,
+        color: options.shadow?.color || 'rgba(0, 0, 0, 0.5)',
+        opacity: options.shadow?.opacity !== undefined ? options.shadow.opacity : 0.7
+      },
+      config: cfg
     };
-    img.src = imageUrl;
-  } else {
-    // 默认：中间画个 + 号
-    ctx.fillStyle = '#e8e8e8';
-    const p = SIZE * 0.1;
-    roundRect(ctx, p, p, SIZE - p*2, SIZE - p*2, cornerR * 0.5);
-    ctx.fill();
-    ctx.fillStyle = '#bbbbbb';
-    ctx.font = 'bold 240px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('+', SIZE/2, SIZE/2);
-  }
 
-  return texture;
-}
-
-// ========== 合成拍立得贴图（单张Canvas，不拼接）高分辨率版本 ==========
-function composePolaroidTexture(imageUrl) {
-  const W = 2048;
-  const H = 2560;  // 2K 分辨率
-  const canvas = document.createElement('canvas');
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext('2d');
-  // 开启高质量图像渲染
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-
-  const cornerR = 56;
-  const borderL = 110, borderR = 110;
-  const borderT = 110, borderB = 570;
-  const photoX = borderL, photoY = borderT;
-  const photoW = W - borderL - borderR;
-  const photoH = H * 0.72 - borderT;
-
-  // 1. 画整体相纸（圆角矩形）
-  ctx.fillStyle = '#faf8f0';
-  roundRect(ctx, 0, 0, W, H, cornerR);
-  ctx.fill();
-
-  // 2. 画照片区（深色底）
-  ctx.fillStyle = '#1a1a1a';
-  roundRect(ctx, photoX, photoY, photoW, photoH, cornerR - 16);
-  ctx.fill();
-
-  // 3. 画底部手写横线
-  const writeY1 = photoY + photoH + 70;
-  const writeY2 = H - 90;
-  ctx.fillStyle = 'rgba(245, 240, 225, 0.6)';
-  ctx.fillRect(photoX, writeY1, photoW, writeY2 - writeY1);
-  ctx.strokeStyle = 'rgba(170, 155, 120, 0.35)';
-  ctx.lineWidth = 4;
-  for (let i = 1; i <= 5; i++) {
-    const y = writeY1 + (writeY2 - writeY1) * i / 6;
-    ctx.beginPath();
-    ctx.moveTo(photoX + 40, y);
-    ctx.lineTo(photoX + photoW - 40, y);
-    ctx.stroke();
-  }
-
-  const texture = new THREE.CanvasTexture(canvas);
-  if (texture.colorSpace !== undefined) {
-    texture.colorSpace = THREE.SRGBColorSpace;
-  } else {
-    texture.encoding = THREE.sRGBEncoding;
-  }
-  // 高质量纹理过滤设置 - 开启 mipmap 提升缩小质量
-  texture.magFilter = THREE.LinearFilter;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.generateMipmaps = true;
-  texture.anisotropy = Math.max(maxAnisotropy, 8);
-  texture.needsUpdate = true;
-
-  // 4. 如果有用户图片，画在照片区
-  if (imageUrl) {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = function() {
-      // 重绘整体（2K 尺寸）
-      ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = '#faf8f0';
-      roundRect(ctx, 0, 0, W, H, cornerR);
-      ctx.fill();
-      ctx.fillStyle = '#1a1a1a';
-      roundRect(ctx, photoX, photoY, photoW, photoH, cornerR - 16);
-      ctx.fill();
-      // 手写横线
-      ctx.fillStyle = 'rgba(245, 240, 225, 0.6)';
-      ctx.fillRect(photoX, writeY1, photoW, writeY2 - writeY1);
-      ctx.strokeStyle = 'rgba(170, 155, 120, 0.35)';
-      ctx.lineWidth = 4;
-      for (let i = 1; i <= 5; i++) {
-        const y = writeY1 + (writeY2 - writeY1) * i / 6;
-        ctx.beginPath();
-        ctx.moveTo(photoX + 40, y);
-        ctx.lineTo(photoX + photoW - 40, y);
-        ctx.stroke();
-      }
-
-      // 计算图片绘制（保持比例裁剪居中）
-      const pad = 16;
-      const dw = photoW - pad * 2;
-      const dh = photoH - pad * 2;
-      const imgRatio = img.width / img.height;
-      const drawRatio = dw / dh;
-      let sx, sy, sw, sh;
-      if (imgRatio > drawRatio) {
-        sw = img.height * drawRatio;
-        sh = img.height;
-        sx = (img.width - sw) / 2;
-        sy = 0;
-      } else {
-        sw = img.width;
-        sh = img.width / drawRatio;
-        sx = 0;
-        sy = (img.height - sh) / 2;
-      }
-
-      // 裁剪成圆角
-      ctx.save();
-      ctx.beginPath();
-      roundRectPath(ctx, photoX + pad, photoY + pad, dw, dh, cornerR - 12);
-      ctx.clip();
-      // 直接 drawImage，不叠加颜色
-      ctx.drawImage(img, sx, sy, sw, sh, photoX + pad, photoY + pad, dw, dh);
-      ctx.restore();
-
-      // 标记纹理需要更新，并强制重新生成 mipmaps
-      texture.needsUpdate = true;
-      if (texture.minFilter === THREE.LinearMipmapLinearFilter ||
-          texture.minFilter === THREE.LinearMipmapNearestFilter ||
-          texture.minFilter === THREE.NearestMipmapLinearFilter ||
-          texture.minFilter === THREE.NearestMipmapNearestFilter) {
-        texture.generateMipmaps = true;
-      }
-    };
-    img.src = imageUrl;
-  } else {
-    // 默认 + 号
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    const p = 16;
-    roundRect(ctx, photoX + p, photoY + p, photoW - p*2, photoH - p*2, cornerR - 20);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = 'bold 200px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('+', photoX + photoW/2, photoY + photoH/2);
-  }
-
-  return texture;
-}
-
-// ========== 合成卡片贴图（单张Canvas，不拼接）高分辨率版本 ==========
-function composeCardTexture(imageUrl, colorHex) {
-  const W = 2048;
-  const H = 3072;  // 2K 分辨率，宽高比 2:3
-  const canvas = document.createElement('canvas');
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-
-  const cornerR = 80;
-  const borderW = 60;
-
-  // 1. 画整体卡片底色（圆角矩形）
-  const baseColor = toCssColor(colorHex || 0x4fc3f7);
-  ctx.fillStyle = baseColor;
-  roundRect(ctx, 0, 0, W, H, cornerR);
-  ctx.fill();
-
-  // 2. 画边框（赛博发光感）
-  ctx.strokeStyle = baseColor;
-  ctx.lineWidth = borderW;
-  roundRect(ctx, borderW/2, borderW/2, W - borderW, H - borderW, cornerR - borderW/2);
-  ctx.stroke();
-
-  // 3. 画图片区域（深色底）
-  const padX = 120;
-  const padY = 180;
-  const photoX = padX;
-  const photoY = padY;
-  const photoW = W - padX * 2;
-  const photoH = H - padY * 2;
-  ctx.fillStyle = '#1a1a2e';
-  roundRect(ctx, photoX, photoY, photoW, photoH, cornerR - 30);
-  ctx.fill();
-
-  const texture = new THREE.CanvasTexture(canvas);
-  if (texture.colorSpace !== undefined) {
-    texture.colorSpace = THREE.SRGBColorSpace;
-  } else {
-    texture.encoding = THREE.sRGBEncoding;
-  }
-  texture.magFilter = THREE.LinearFilter;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.generateMipmaps = true;
-  texture.anisotropy = Math.max(maxAnisotropy, 8);
-  texture.needsUpdate = true;
-
-  // 4. 如果有用户图片，画在图片区域
-  if (imageUrl) {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = function() {
-      // 重绘整体
-      ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = baseColor;
-      roundRect(ctx, 0, 0, W, H, cornerR);
-      ctx.fill();
-      ctx.strokeStyle = baseColor;
-      ctx.lineWidth = borderW;
-      roundRect(ctx, borderW/2, borderW/2, W - borderW, H - borderW, cornerR - borderW/2);
-      ctx.stroke();
-      ctx.fillStyle = '#1a1a2e';
-      roundRect(ctx, photoX, photoY, photoW, photoH, cornerR - 30);
-      ctx.fill();
-
-      // 计算图片绘制（保持比例裁剪居中）
-      const pad = 20;
-      const dw = photoW - pad * 2;
-      const dh = photoH - pad * 2;
-      const imgRatio = img.width / img.height;
-      const drawRatio = dw / dh;
-      let sx, sy, sw, sh;
-      if (imgRatio > drawRatio) {
-        sw = img.height * drawRatio;
-        sh = img.height;
-        sx = (img.width - sw) / 2;
-        sy = 0;
-      } else {
-        sw = img.width;
-        sh = img.width / drawRatio;
-        sx = 0;
-        sy = (img.height - sh) / 2;
-      }
-
-      ctx.save();
-      ctx.beginPath();
-      roundRectPath(ctx, photoX + pad, photoY + pad, dw, dh, cornerR - 40);
-      ctx.clip();
-      ctx.drawImage(img, sx, sy, sw, sh, photoX + pad, photoY + pad, dw, dh);
-      ctx.restore();
-
-      texture.needsUpdate = true;
-      if (texture.minFilter === THREE.LinearMipmapLinearFilter ||
-          texture.minFilter === THREE.LinearMipmapNearestFilter ||
-          texture.minFilter === THREE.NearestMipmapLinearFilter ||
-          texture.minFilter === THREE.NearestMipmapNearestFilter) {
-        texture.generateMipmaps = true;
-      }
-    };
-    img.src = imageUrl;
-  } else {
-    // 默认 + 号
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    const p = 20;
-    roundRect(ctx, photoX + p, photoY + p, photoW - p*2, photoH - p*2, cornerR - 40);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = 'bold 240px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('+', photoX + photoW/2, photoY + photoH/2);
-  }
-
-  return texture;
-}
-
-// ========== 合成立牌贴图（单张Canvas，不拼接）高分辨率版本 ==========
-function composeStandTexture(imageUrl, colorHex) {
-  const W = 2048;
-  const H = 2944;  // 接近 2:3 比例
-  const canvas = document.createElement('canvas');
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-
-  const cornerR = 120;
-
-  // 1. 画整体立牌底色（圆角矩形，透明中心放图片）
-  const baseColor = toCssColor(colorHex || 0xffd54f);
-  ctx.fillStyle = baseColor;
-  roundRect(ctx, 0, 0, W, H, cornerR);
-  ctx.fill();
-
-  // 2. 画图片区域（居中，带圆角）
-  const pad = 120;
-  const photoX = pad;
-  const photoY = pad;
-  const photoW = W - pad * 2;
-  const photoH = H - pad * 2;
-  ctx.fillStyle = '#1a1a2e';
-  roundRect(ctx, photoX, photoY, photoW, photoH, cornerR - 40);
-  ctx.fill();
-
-  const texture = new THREE.CanvasTexture(canvas);
-  if (texture.colorSpace !== undefined) {
-    texture.colorSpace = THREE.SRGBColorSpace;
-  } else {
-    texture.encoding = THREE.sRGBEncoding;
-  }
-  texture.magFilter = THREE.LinearFilter;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.generateMipmaps = true;
-  texture.anisotropy = Math.max(maxAnisotropy, 8);
-  texture.needsUpdate = true;
-
-  // 3. 如果有用户图片，画在图片区域
-  if (imageUrl) {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = function() {
-      // 重绘整体
-      ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = baseColor;
-      roundRect(ctx, 0, 0, W, H, cornerR);
-      ctx.fill();
-      ctx.fillStyle = '#1a1a2e';
-      roundRect(ctx, photoX, photoY, photoW, photoH, cornerR - 40);
-      ctx.fill();
-
-      // 计算图片绘制（保持比例裁剪居中）
-      const pad2 = 16;
-      const dw = photoW - pad2 * 2;
-      const dh = photoH - pad2 * 2;
-      const imgRatio = img.width / img.height;
-      const drawRatio = dw / dh;
-      let sx, sy, sw, sh;
-      if (imgRatio > drawRatio) {
-        sw = img.height * drawRatio;
-        sh = img.height;
-        sx = (img.width - sw) / 2;
-        sy = 0;
-      } else {
-        sw = img.width;
-        sh = img.width / drawRatio;
-        sx = 0;
-        sy = (img.height - sh) / 2;
-      }
-
-      ctx.save();
-      ctx.beginPath();
-      roundRectPath(ctx, photoX + pad2, photoY + pad2, dw, dh, cornerR - 50);
-      ctx.clip();
-      ctx.drawImage(img, sx, sy, sw, sh, photoX + pad2, photoY + pad2, dw, dh);
-      ctx.restore();
-
-      texture.needsUpdate = true;
-      if (texture.minFilter === THREE.LinearMipmapLinearFilter ||
-          texture.minFilter === THREE.LinearMipmapNearestFilter ||
-          texture.minFilter === THREE.NearestMipmapLinearFilter ||
-          texture.minFilter === THREE.NearestMipmapNearestFilter) {
-        texture.generateMipmaps = true;
-      }
-    };
-    img.src = imageUrl;
-  } else {
-    // 默认 + 号
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    const p = 16;
-    roundRect(ctx, photoX + p, photoY + p, photoW - p*2, photoH - p*2, cornerR - 50);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = 'bold 240px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('+', photoX + photoW/2, photoY + photoH/2);
-  }
-
-  return texture;
-}
-
-// ========== Canvas 工具：圆角矩形 ==========
-function roundRect(ctx, x, y, w, h, r) {
-  roundRectPath(ctx, x, y, w, h, r);
-}
-function roundRectPath(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-// ===== 创建徽章（一个整体，单张贴图，不拼接） =====
-function createBadge(config, options) {
-  const size = config.width;
-
-  // 一个 PlaneGeometry + 一张合成好的贴图 = 一个整体
-  const geo = new THREE.PlaneGeometry(size, size);
-  const tex = composeBadgeTexture(options.imageUrl);
-  // 使用 emissiveMap 让贴图颜色不受场景彩色光照影响
-  const mat = new THREE.MeshStandardMaterial({
-    map: tex,
-    emissiveMap: tex,
-    emissive: 0xffffff,
-    emissiveIntensity: 0.85,
-    transparent: true,
-    roughness: 0.55,
-    metalness: 0.0,
-    side: THREE.DoubleSide,
-    color: 0xffffff
-  });
-
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.userData.isImage = config.hasImage;
-  mesh.userData.composedTexture = tex;
-
-  return mesh;
-}
-
-// ===== 创建拍立得（一个整体，单张贴图，不拼接） =====
-function createPolaroid(config, options) {
-  const w = config.width;
-  const h = config.height;
-
-  // 一个 PlaneGeometry + 一张合成好的贴图 = 一个整体
-  const geo = new THREE.PlaneGeometry(w, h);
-  const tex = composePolaroidTexture(options.imageUrl);
-  // 使用 emissiveMap 让贴图颜色不受场景彩色光照影响
-  const mat = new THREE.MeshStandardMaterial({
-    map: tex,
-    emissiveMap: tex,
-    emissive: 0xffffff,
-    emissiveIntensity: 0.85,
-    transparent: true,
-    roughness: 0.85,
-    metalness: 0.0,
-    side: THREE.DoubleSide,
-    color: 0xffffff
-  });
-
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.userData.isImage = config.hasImage;
-  mesh.userData.composedTexture = tex;
-
-  return mesh;
-}
-
-// ===== 创建卡片（一个整体，单张贴图，不拼接） =====
-function createCard(config, options) {
-  const w = config.width;
-  const h = config.height;
-
-  // 一个 PlaneGeometry + 一张合成好的贴图 = 一个整体
-  const geo = new THREE.PlaneGeometry(w, h);
-  const colorHex = options.color || config.defaultColor;
-  const tex = composeCardTexture(options.imageUrl, colorHex);
-  const mat = new THREE.MeshStandardMaterial({
-    map: tex,
-    emissiveMap: tex,
-    emissive: 0xffffff,
-    emissiveIntensity: 0.85,
-    transparent: true,
-    roughness: 0.4,
-    metalness: 0.3,
-    side: THREE.DoubleSide,
-    color: 0xffffff
-  });
-
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.userData.isImage = config.hasImage;
-  mesh.userData.composedTexture = tex;
-
-  return mesh;
-}
-
-// ===== 创建立牌（主体一个整体，底座单独保留） =====
-function createStand(config, options) {
-  const group = new THREE.Group();
-  const w = config.width;
-  const h = config.height;
-  const colorHex = options.color || config.defaultColor;
-
-  // 立牌主体面板：一个 PlaneGeometry + 一张合成好的贴图 = 一个整体
-  const faceGeo = new THREE.PlaneGeometry(w, h);
-  const tex = composeStandTexture(options.imageUrl, colorHex);
-  const faceMat = new THREE.MeshStandardMaterial({
-    map: tex,
-    emissiveMap: tex,
-    emissive: 0xffffff,
-    emissiveIntensity: 0.85,
-    transparent: true,
-    roughness: 0.3,
-    metalness: 0.5,
-    side: THREE.DoubleSide,
-    color: 0xffffff
-  });
-  const face = new THREE.Mesh(faceGeo, faceMat);
-  face.castShadow = true;
-  face.receiveShadow = true;
-  face.userData.isImage = config.hasImage;
-  face.userData.composedTexture = tex;
-  group.add(face);
-
-  // 底座（物理结构，保留）
-  const baseW = config.width * 0.6;
-  const baseGeo = new THREE.BoxGeometry(baseW, 0.15, config.depth + 0.3);
-  const baseMat = new THREE.MeshStandardMaterial({
-    color: colorHex,
-    roughness: 0.3,
-    metalness: 0.5,
-    emissive: colorHex,
-    emissiveIntensity: 0.08
-  });
-  const base = new THREE.Mesh(baseGeo, baseMat);
-  base.position.y = -config.height / 2 - 0.08;
-  base.position.z = -0.1;
-  base.castShadow = true;
-  group.add(base);
-
-  return group;
-}
-
-// ===== 创建花瓣 =====
-function createPetal(config, options) {
-  const shape = new THREE.Shape();
-  const r = config.width / 2;
-  shape.moveTo(0, r);
-  shape.bezierCurveTo(r * 0.5, r * 0.5, r, 0, 0, -r);
-  shape.bezierCurveTo(-r, 0, -r * 0.5, r * 0.5, 0, r);
-
-  const geo = new THREE.ExtrudeGeometry(shape, {
-    depth: config.depth,
-    bevelEnabled: true,
-    bevelThickness: 0.01,
-    bevelSize: 0.02,
-    bevelSegments: 3
-  });
-  geo.center();
-
-  const mat = new THREE.MeshStandardMaterial({
-    color: options.color || config.defaultColor,
-    roughness: 0.5,
-    metalness: 0.2,
-    emissive: options.color || config.defaultColor,
-    emissiveIntensity: 0.15,
-    side: THREE.DoubleSide
-  });
-
-  const petal = new THREE.Mesh(geo, mat);
-  petal.castShadow = true;
-  petal.rotation.x = Math.PI / 2;
-  return petal;
-}
-
-// ===== 创建星星 =====
-function createStar(config, options) {
-  const shape = new THREE.Shape();
-  const outerR = config.width / 2;
-  const innerR = outerR * 0.4;
-  const points = 5;
-
-  for (let i = 0; i < points * 2; i++) {
-    const r = i % 2 === 0 ? outerR : innerR;
-    const angle = (i * Math.PI) / points - Math.PI / 2;
-    const x = Math.cos(angle) * r;
-    const y = Math.sin(angle) * r;
-    if (i === 0) shape.moveTo(x, y);
-    else shape.lineTo(x, y);
-  }
-  shape.closePath();
-
-  const geo = new THREE.ExtrudeGeometry(shape, {
-    depth: config.depth,
-    bevelEnabled: true,
-    bevelThickness: 0.01,
-    bevelSize: 0.02,
-    bevelSegments: 2
-  });
-  geo.center();
-
-  const mat = new THREE.MeshStandardMaterial({
-    color: options.color || config.defaultColor,
-    roughness: 0.3,
-    metalness: 0.6,
-    emissive: options.color || config.defaultColor,
-    emissiveIntensity: 0.3,
-    side: THREE.DoubleSide
-  });
-
-  const star = new THREE.Mesh(geo, mat);
-  star.castShadow = true;
-  star.rotation.x = Math.PI / 2;
-  return star;
-}
-
-// ===== 创建图片材质 =====
-// 把数字颜色（如 0xff6b9d）转成 CSS 十六进制颜色字符串（如 '#ff6b9d'）
-function toCssColor(color) {
-  if (typeof color === 'string') return color;
-  if (typeof color === 'number') return '#' + color.toString(16).padStart(6, '0');
-  return '#3a1a5a';
-}
-
-// ===== 程序化纹理生成器 =====
-
-// 生成金属拉丝纹理
-function createBrushedMetalTexture(baseColorHex) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d');
-  const base = toCssColor(baseColorHex);
-  ctx.fillStyle = base;
-  ctx.fillRect(0, 0, 512, 512);
-
-  // 横向拉丝线条
-  for (let i = 0; i < 800; i++) {
-    const y = Math.random() * 512;
-    const alpha = Math.random() * 0.15;
-    const shade = Math.random() > 0.5 ? 'rgba(255,255,255,' : 'rgba(0,0,0,';
-    ctx.strokeStyle = shade + alpha + ')';
-    ctx.lineWidth = Math.random() * 1.2 + 0.3;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(512, y + (Math.random() - 0.5) * 4);
-    ctx.stroke();
-  }
-
-  // 细划痕
-  for (let i = 0; i < 200; i++) {
-    const x = Math.random() * 512;
-    const y = Math.random() * 512;
-    const len = Math.random() * 30 + 5;
-    const angle = Math.random() * Math.PI;
-    ctx.strokeStyle = 'rgba(255,255,255,' + (Math.random() * 0.2 + 0.05) + ')';
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
-    ctx.stroke();
-  }
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  return tex;
-}
-
-// 生成纸张纹理（用于拍立得边框）
-function createPaperTexture(baseColorHex) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d');
-  const base = toCssColor(baseColorHex);
-  ctx.fillStyle = base;
-  ctx.fillRect(0, 0, 512, 512);
-
-  // 纸张纤维噪点
-  const imgData = ctx.getImageData(0, 0, 512, 512);
-  const data = imgData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const noise = (Math.random() - 0.5) * 25;
-    data[i] = Math.max(0, Math.min(255, data[i] + noise));
-    data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise));
-    data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise));
-  }
-  ctx.putImageData(imgData, 0, 0);
-
-  // 暗角
-  const vignette = ctx.createRadialGradient(256, 256, 100, 256, 256, 400);
-  vignette.addColorStop(0, 'rgba(0,0,0,0)');
-  vignette.addColorStop(1, 'rgba(0,0,0,0.12)');
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, 512, 512);
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  return tex;
-}
-
-// 生成粗糙度贴图（白色=光滑，黑色=粗糙）
-function createRoughnessTexture(type) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d');
-
-  if (type === 'metal') {
-    // 金属：大部分光滑，有划痕
-    ctx.fillStyle = '#222';
-    ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 100; i++) {
-      ctx.strokeStyle = 'rgba(255,255,255,' + (Math.random() * 0.3) + ')';
-      ctx.lineWidth = Math.random();
-      ctx.beginPath();
-      const y = Math.random() * 256;
-      ctx.moveTo(0, y);
-      ctx.lineTo(256, y);
-      ctx.stroke();
+    // 初始位置吸附（恢复布局时可跳过）
+    if (!options.skipSnap) {
+      const snapped = snapToHole(itemData.x, itemData.y);
+      itemData.x = snapped.x;
+      itemData.y = snapped.y;
     }
-  } else {
-    // 纸张：整体粗糙
-    ctx.fillStyle = '#aaa';
-    ctx.fillRect(0, 0, 256, 256);
-    const imgData = ctx.getImageData(0, 0, 256, 256);
-    const data = imgData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const n = (Math.random() - 0.5) * 60;
-      data[i] = Math.max(0, Math.min(255, data[i] + n));
-      data[i + 1] = data[i];
-      data[i + 2] = data[i];
-    }
-    ctx.putImageData(imgData, 0, 0);
-  }
-  return new THREE.CanvasTexture(canvas);
-}
 
-function createImageMaterial(imageUrl, w, h, defaultColor) {
-  if (imageUrl) {
-    const texture = new THREE.TextureLoader().load(imageUrl);
-    if (texture.colorSpace !== undefined) {
-      texture.colorSpace = THREE.SRGBColorSpace;
+    state.items.push(itemData);
+    renderItem(itemData);
+    return itemData;
+  }
+
+  function renderItem(itemData) {
+    // 移除旧 DOM
+    const oldEl = document.getElementById(itemData.id);
+    if (oldEl) oldEl.remove();
+
+    const el = document.createElement('div');
+    el.id = itemData.id;
+    el.className = 'peg-item ' + itemData.type;
+    el.dataset.id = itemData.id;
+
+    updateItemStyle(el, itemData);
+    buildItemContent(el, itemData);
+
+    // 事件绑定
+    bindItemEvents(el, itemData);
+
+    pegboard.appendChild(el);
+  }
+
+  function updateItemStyle(el, itemData) {
+    const w = itemData.config.width * itemData.scale;
+    const h = itemData.config.height * itemData.scale;
+
+    el.style.width = w + 'px';
+    el.style.height = h + 'px';
+    el.style.left = (itemData.x - w / 2) + 'px';
+    el.style.top = (itemData.y - h / 2) + 'px';
+    el.style.transform = `rotate(${itemData.rotation}deg)`;
+    el.style.zIndex = state.items.indexOf(itemData) + 10;
+
+    // 应用阴影
+    applyItemShadow(el, itemData);
+  }
+
+  // 生成物品阴影
+  function buildItemShadow(itemData) {
+    const s = itemData.shadow;
+    if (!s || !s.enabled) return null;
+
+    // 提取颜色并调整透明度
+    let color = s.color;
+    if (s.opacity !== undefined && s.opacity >= 0) {
+      // 尝试将颜色转为 rgba
+      if (color.startsWith('#')) {
+        const rgb = toRgb(color);
+        color = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${s.opacity})`;
+      } else if (color.startsWith('rgb(') || color.startsWith('rgba(')) {
+        // 替换 alpha
+        const rgb = toRgb(color);
+        color = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${s.opacity})`;
+      }
+    }
+
+    return `${s.offsetX}px ${s.offsetY}px ${s.blur}px ${s.spread}px ${color}`;
+  }
+
+  function applyItemShadow(el, itemData) {
+    const s = itemData.shadow;
+    const cfg = ITEM_CONFIG[itemData.type];
+    const isCustomWithImage = cfg && cfg.isCustom && itemData.imageUrl;
+
+    if (s && s.enabled) {
+      // 提取颜色并调整透明度
+      let color = s.color;
+      if (s.opacity !== undefined && s.opacity >= 0) {
+        if (color.startsWith('#')) {
+          const rgb = toRgb(color);
+          color = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${s.opacity})`;
+        } else if (color.startsWith('rgb(') || color.startsWith('rgba(')) {
+          const rgb = toRgb(color);
+          color = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${s.opacity})`;
+        }
+      }
+      // filter: drop-shadow() 不支持 spread，使用 4 参数格式
+      el.style.filter = `drop-shadow(${s.offsetX}px ${s.offsetY}px ${s.blur}px ${color})`;
+
+      // custom 物品有图片时，移除默认的 box-shadow、border 和 background-color，
+      // 这样 drop-shadow 才能正确沿着透明图片的轮廓生成阴影
+      if (isCustomWithImage) {
+        el.style.boxShadow = 'none';
+        el.style.border = 'none';
+        el.style.backgroundColor = 'transparent';
+      }
     } else {
-      texture.encoding = THREE.sRGBEncoding;
+      el.style.filter = '';
+      // custom 物品有图片且关闭自定义阴影时，移除不透明样式让用户看到透明效果
+      if (isCustomWithImage) {
+        el.style.boxShadow = 'none';
+        el.style.border = 'none';
+        el.style.backgroundColor = 'transparent';
+      } else if (cfg && cfg.isCustom) {
+        // 无图片时恢复默认样式
+        el.style.boxShadow = '';
+        el.style.border = '';
+        el.style.backgroundColor = '';
+      }
     }
-    texture.magFilter = THREE.LinearFilter;
-    texture.minFilter = THREE.LinearMipmapLinearFilter;
-    texture.anisotropy = Math.max(maxAnisotropy, 8);
-    return new THREE.MeshStandardMaterial({
-      map: texture,
-      emissiveMap: texture,
-      emissive: 0xffffff,
-      emissiveIntensity: 0.85,
-      roughness: 0.7,
-      metalness: 0.0
-    });
-  } else {
-    // 默认占位图（渐变色）
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-    const gradient = ctx.createLinearGradient(0, 0, 256, 256);
-    const baseColor = toCssColor(defaultColor || 0x3a1a5a);
-    gradient.addColorStop(0, baseColor);
-    gradient.addColorStop(1, '#1a0a2e');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 256, 256);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.font = 'bold 32px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('+', 128, 128);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.encoding = THREE.sRGBEncoding;
-    return new THREE.MeshStandardMaterial({
-      map: texture,
-      roughness: 0.7,
-      metalness: 0.0
-    });
-  }
-}
-
-// ===== 更新拖拽控制对象列表 =====
-function updateDragControls() {
-  if (!dragControls) return;
-  const objs = dragControls.getObjects();
-  objs.length = 0;
-  decorations.forEach(d => objs.push(d));
-}
-
-// ===== 右侧属性面板 =====
-function updatePropertyPanel(obj) {
-  const panel = document.getElementById('property-panel');
-  if (!obj) {
-    panel.style.display = 'none';
-    return;
   }
 
-  panel.style.display = 'block';
-  const config = ITEM_TYPES[obj.userData.type];
+  function buildItemContent(el, itemData) {
+    el.innerHTML = '';
 
-  // 颜色设置显示/隐藏
-  const colorSetting = document.getElementById('color-setting');
-  colorSetting.style.display = config.hasImage ? 'none' : 'flex';
-
-  // 当前颜色
-  const colorInput = document.getElementById('item-color');
-  colorInput.value = '#' + obj.userData.color.toString(16).padStart(6, '0');
-
-  // 当前缩放
-  const scaleInput = document.getElementById('item-scale');
-  scaleInput.value = obj.scale.x.toFixed(1);
-
-  // 当前旋转
-  const rotationInput = document.getElementById('item-rotation');
-  rotationInput.value = Math.round(obj.rotation.z * 180 / Math.PI);
-
-  // 清空上传输入
-  document.getElementById('upload-image').value = '';
-}
-
-// ===== 默认物品 =====
-function addDefaultItems() {
-  createDecoration('badge', { position: new THREE.Vector3(-4, 2, 0.2) });
-  createDecoration('polaroid', { position: new THREE.Vector3(0, 1.5, 0.15) });
-  createDecoration('card', { position: new THREE.Vector3(4, 2, 0.15) });
-  createDecoration('stand', { position: new THREE.Vector3(-3, -2, 0.2) });
-  createDecoration('badge', { position: new THREE.Vector3(3, -1.5, 0.2), color: 0x4fc3f7 });
-  createDecoration('petal', { position: new THREE.Vector3(-5, -1, 0.12) });
-  createDecoration('star', { position: new THREE.Vector3(5, 3, 0.14) });
-  createDecoration('petal', { position: new THREE.Vector3(5.5, -2, 0.12), color: 0xff69b4 });
-  createDecoration('star', { position: new THREE.Vector3(-5.5, 3, 0.14), color: 0x00f0ff });
-}
-
-// ===== 事件监听 =====
-function setupEventListeners() {
-  // 窗口大小变化
-  window.addEventListener('resize', onWindowResize);
-
-  // 点击物品选中
-  renderer.domElement.addEventListener('click', onCanvasClick);
-
-  // 添加物品按钮
-  document.querySelectorAll('.item-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const type = btn.getAttribute('data-type');
-      const newItem = createDecoration(type);
-      if (newItem) {
-        selectedObject = newItem;
-        highlightObject(newItem);
-        updatePropertyPanel(newItem);
-      }
-    });
-  });
-
-  // 墙面颜色
-  document.getElementById('wall-color').addEventListener('input', (e) => {
-    const color = parseInt(e.target.value.replace('#', ''), 16);
-    WALL_CONFIG.color = color;
-    if (wall) wall.material.color.setHex(color);
-  });
-
-  // 边框颜色
-  document.getElementById('frame-color').addEventListener('input', (e) => {
-    const color = parseInt(e.target.value.replace('#', ''), 16);
-    WALL_CONFIG.frameColor = color;
-    if (frameGroup) {
-      frameGroup.traverse(child => {
-        if (child.isMesh && child.material) {
-          child.material.color.setHex(color);
-          if (child.material.emissive) {
-            child.material.emissive.setHex(color);
-          }
-        }
-      });
-    }
-  });
-
-  // 光线强度
-  document.getElementById('light-intensity').addEventListener('input', (e) => {
-    const val = parseFloat(e.target.value);
-    if (mainLight) mainLight.intensity = val;
-    if (ambientLight) ambientLight.intensity = val * 0.35;
-    renderer.toneMappingExposure = val;
-  });
-
-  // 物品颜色
-  document.getElementById('item-color').addEventListener('input', (e) => {
-    if (!selectedObject) return;
-    const color = parseInt(e.target.value.replace('#', ''), 16);
-    selectedObject.userData.color = color;
-    const type = selectedObject.userData.type;
-
-    // 卡片和立牌：改颜色时重新合成贴图
-    if (type === 'card' || type === 'stand') {
-      let targetMesh = selectedObject;
-      if (selectedObject.isGroup) {
-        selectedObject.traverse(child => {
-          if (child.isMesh && child.userData.isImage) targetMesh = child;
-        });
-        if (targetMesh === selectedObject || !targetMesh.material || !targetMesh.material.map) {
-          selectedObject.traverse(child => {
-            if (child.isMesh && child.material && child.material.map) targetMesh = child;
-          });
-        }
-      }
-      if (targetMesh && targetMesh.material) {
-        let newTex;
-        if (type === 'card') {
-          newTex = composeCardTexture(null, color);
+    switch (itemData.type) {
+      case 'badge':
+        if (itemData.imageUrl) {
+          el.style.backgroundImage = `url(${itemData.imageUrl})`;
+          el.style.backgroundColor = itemData.color;
         } else {
-          newTex = composeStandTexture(null, color);
+          el.style.backgroundImage = `radial-gradient(circle at 30% 30%, ${lighten(itemData.color, 30)}, ${itemData.color} 50%, ${darken(itemData.color, 20)})`;
         }
-        if (targetMesh.material.map) targetMesh.material.map.dispose();
-        if (targetMesh.material.emissiveMap) targetMesh.material.emissiveMap.dispose();
-        targetMesh.material.map = newTex;
-        targetMesh.material.emissiveMap = newTex;
-        targetMesh.material.needsUpdate = true;
-        targetMesh.userData.composedTexture = newTex;
-      }
+        break;
+
+      case 'polaroid':
+        el.style.backgroundColor = '#f5f0e6';
+        const photo = document.createElement('div');
+        photo.className = 'polaroid-photo';
+        if (itemData.imageUrl) {
+          photo.style.backgroundImage = `url(${itemData.imageUrl})`;
+        } else {
+          photo.innerHTML = '<div class="placeholder">+</div>';
+        }
+        el.appendChild(photo);
+        break;
+
+      case 'card':
+      case 'stand':
+        if (itemData.imageUrl) {
+          el.style.backgroundImage = `url(${itemData.imageUrl})`;
+        } else {
+          // 用 canvas 绘制带颜色的卡片
+          el.style.backgroundImage = `linear-gradient(135deg, ${lighten(itemData.color, 20)}, ${itemData.color})`;
+          const placeholder = document.createElement('div');
+          placeholder.className = 'placeholder';
+          placeholder.textContent = '+';
+          placeholder.style.borderRadius = 'inherit';
+          el.appendChild(placeholder);
+        }
+        break;
+
+      case 'petal':
+        // SVG 花瓣
+        el.style.backgroundImage = `url("data:image/svg+xml;utf8,${encodeURIComponent(createPetalSVG(itemData.color))}")`;
+        break;
+
+      case 'star':
+        // SVG 星星
+        el.style.backgroundImage = `url("data:image/svg+xml;utf8,${encodeURIComponent(createStarSVG(itemData.color))}")`;
+        break;
+
+      case 'custom':
+        if (itemData.imageUrl) {
+          // 使用 <img> 元素而不是 background-image，
+          // 这样 drop-shadow 才能正确沿着透明图片的轮廓生成阴影
+          el.style.backgroundImage = '';
+          el.style.backgroundColor = 'transparent';
+          const img = document.createElement('img');
+          img.src = itemData.imageUrl;
+          img.style.width = '100%';
+          img.style.height = '100%';
+          img.style.objectFit = 'contain';
+          img.style.display = 'block';
+          img.style.pointerEvents = 'none';
+          img.draggable = false;
+          el.appendChild(img);
+        } else {
+          const placeholder = document.createElement('div');
+          placeholder.className = 'placeholder';
+          placeholder.textContent = '＋';
+          placeholder.style.borderRadius = 'inherit';
+          el.appendChild(placeholder);
+        }
+        break;
     }
 
-    // 其他没有 isImage 标记的子物体（如立牌底座）也更新颜色
-    selectedObject.traverse(child => {
-      if (child.isMesh && child.material && !child.userData.isImage) {
-        if (child.material.color) child.material.color.setHex(color);
-        if (child.material.emissive) {
-          child.material.emissive.setHex(color);
-          child.material.emissiveIntensity = 0.15;
-        }
-      }
+    // 渲染物品名称标签
+    if (itemData.name && itemData.showName) {
+      const label = document.createElement('div');
+      label.className = 'item-label';
+      label.textContent = itemData.name;
+      el.appendChild(label);
+    }
+  }
+
+  function createPetalSVG(color) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <g fill="${color}" transform="translate(32,32)">
+        ${[0, 60, 120, 180, 240, 300].map(deg =>
+          `<ellipse cx="0" cy="-14" rx="8" ry="16" transform="rotate(${deg})"/>`
+        ).join('')}
+        <circle cx="0" cy="0" r="6" fill="${darken(color, 30)}"/>
+      </g>
+    </svg>`;
+  }
+
+  function createStarSVG(color) {
+    const points = [];
+    for (let i = 0; i < 10; i++) {
+      const r = i % 2 === 0 ? 28 : 12;
+      const a = (i * 36 - 90) * Math.PI / 180;
+      points.push(`${32 + r * Math.cos(a)},${32 + r * Math.sin(a)}`);
+    }
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <polygon points="${points.join(' ')}" fill="${color}" stroke="${darken(color, 20)}" stroke-width="2"/>
+    </svg>`;
+  }
+
+  function lighten(hex, amount) {
+    const { r, g, b } = toRgb(hex);
+    return `rgb(${clamp(r + amount, 0, 255)},${clamp(g + amount, 0, 255)},${clamp(b + amount, 0, 255)})`;
+  }
+
+  function darken(hex, amount) {
+    const { r, g, b } = toRgb(hex);
+    return `rgb(${clamp(r - amount, 0, 255)},${clamp(g - amount, 0, 255)},${clamp(b - amount, 0, 255)})`;
+  }
+
+  // ========== 拖拽 ==========
+  function bindItemEvents(el, itemData) {
+    el.addEventListener('mousedown', (e) => startDrag(e, itemData, el));
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectItem(itemData);
     });
-  });
+  }
 
-  // 物品缩放
-  document.getElementById('item-scale').addEventListener('input', (e) => {
-    if (!selectedObject) return;
-    const s = parseFloat(e.target.value);
-    selectedObject.scale.set(s, s, s);
-  });
+  function startDrag(e, itemData, el) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
 
-  // 物品旋转
-  document.getElementById('item-rotation').addEventListener('input', (e) => {
-    if (!selectedObject) return;
-    const deg = parseFloat(e.target.value);
-    selectedObject.rotation.z = deg * Math.PI / 180;
-  });
+    const rect = pegboard.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
 
-  // 上传图片
-  document.getElementById('upload-image').addEventListener('change', (e) => {
-    if (!selectedObject) return;
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = function(event) {
-      const imageUrl = event.target.result;
-      applyImageToObject(selectedObject, imageUrl);
+    state.dragging = {
+      item: itemData,
+      el,
+      offsetX: mouseX - itemData.x,
+      offsetY: mouseY - itemData.y,
+      moved: false
     };
-    reader.readAsDataURL(file);
-  });
 
-  // 复制
-  document.getElementById('btn-duplicate').addEventListener('click', () => {
-    if (!selectedObject) return;
-    const type = selectedObject.userData.type;
-    const pos = selectedObject.position.clone();
-    pos.x += 1;
-    pos.y += 0.5;
-    const newItem = createDecoration(type, {
-      position: pos,
-      color: selectedObject.userData.color,
-      rotation: selectedObject.rotation.z
-    });
-    if (newItem) {
-      newItem.scale.copy(selectedObject.scale);
-      selectedObject = newItem;
-      highlightObject(newItem);
-      updatePropertyPanel(newItem);
-    }
-  });
+    el.classList.add('dragging');
+    selectItem(itemData);
 
-  // 删除
-  document.getElementById('btn-delete').addEventListener('click', () => {
-    if (!selectedObject) return;
-    scene.remove(selectedObject);
-    const idx = decorations.indexOf(selectedObject);
-    if (idx > -1) decorations.splice(idx, 1);
-    selectedObject = null;
-    highlightObject(null);
-    updatePropertyPanel(null);
-    updateDragControls();
-  });
-
-  // 重置视角
-  document.getElementById('btn-reset-view').addEventListener('click', () => {
-    camera.position.set(0, 0, 14);
-    orbitControls.target.set(0, 0, 0);
-    orbitControls.update();
-  });
-
-  // 截图
-  document.getElementById('btn-screenshot').addEventListener('click', takeScreenshot);
-
-  // 关闭弹窗
-  document.getElementById('btn-close-modal').addEventListener('click', () => {
-    document.getElementById('screenshot-modal').style.display = 'none';
-  });
-
-  // 下载
-  document.getElementById('btn-download').addEventListener('click', downloadScreenshot);
-
-  // ESC 取消选中
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      selectedObject = null;
-      highlightObject(null);
-      updatePropertyPanel(null);
-    }
-  });
-}
-
-// ===== 给物品应用图片 =====
-function applyImageToObject(obj, imageUrl) {
-  // 获取顶层物品（可能是 Group，也可能是 Mesh）
-  let top = obj;
-  while (top.parent && !decorations.includes(top)) {
-    top = top.parent;
+    document.addEventListener('mousemove', onDrag);
+    document.addEventListener('mouseup', endDrag);
   }
 
-  const type = top.userData.type;
+  function onDrag(e) {
+    if (!state.dragging) return;
 
-  // 徽章、拍立得、卡片、立牌：重新合成单张贴图
-  if (type === 'badge' || type === 'polaroid' || type === 'card' || type === 'stand') {
-    let newTex;
-    if (type === 'badge') {
-      newTex = composeBadgeTexture(imageUrl);
-    } else if (type === 'polaroid') {
-      newTex = composePolaroidTexture(imageUrl);
-    } else if (type === 'card') {
-      newTex = composeCardTexture(imageUrl, top.userData.color);
-    } else {
-      newTex = composeStandTexture(imageUrl, top.userData.color);
+    const rect = pegboard.getBoundingClientRect();
+    let x = e.clientX - rect.left - state.dragging.offsetX;
+    let y = e.clientY - rect.top - state.dragging.offsetY;
+
+    // 限制在板内
+    const w = state.dragging.item.config.width * state.dragging.item.scale;
+    const h = state.dragging.item.config.height * state.dragging.item.scale;
+    x = clamp(x, w / 2, CONFIG.board.width - w / 2);
+    y = clamp(y, h / 2, CONFIG.board.height - h / 2);
+
+    // 显示吸附提示
+    if (CONFIG.snapEnabled) {
+      const { hole, distance } = findNearestHole(x, y);
+      if (distance <= CONFIG.snapThreshold) {
+        showSnapHint(hole);
+      } else {
+        clearSnapHints();
+      }
     }
 
-    // 找到实际的 Mesh（Group 里的 isImage Mesh，或者本身就是 Mesh）
-    let targetMesh = top;
-    if (top.isGroup) {
-      top.traverse(child => {
-        if (child.isMesh && child.userData.isImage) targetMesh = child;
+    state.dragging.item.x = x;
+    state.dragging.item.y = y;
+    state.dragging.moved = true;
+
+    const el = state.dragging.el;
+    el.style.left = (x - w / 2) + 'px';
+    el.style.top = (y - h / 2) + 'px';
+  }
+
+  function endDrag(e) {
+    if (!state.dragging) return;
+
+    const itemData = state.dragging.item;
+    const el = state.dragging.el;
+
+    // 吸附到最近孔位
+    const snapped = snapToHole(itemData.x, itemData.y);
+    itemData.x = snapped.x;
+    itemData.y = snapped.y;
+
+    const w = itemData.config.width * itemData.scale;
+    const h = itemData.config.height * itemData.scale;
+    el.style.left = (snapped.x - w / 2) + 'px';
+    el.style.top = (snapped.y - h / 2) + 'px';
+
+    el.classList.remove('dragging');
+    clearSnapHints();
+
+    document.removeEventListener('mousemove', onDrag);
+    document.removeEventListener('mouseup', endDrag);
+    state.dragging = null;
+  }
+
+  // ========== 选中 / 属性面板 ==========
+  function selectItem(itemData) {
+    // 移除旧选中
+    if (state.selectedItem) {
+      const oldEl = document.getElementById(state.selectedItem.id);
+      if (oldEl) oldEl.classList.remove('selected');
+    }
+
+    state.selectedItem = itemData;
+
+    const el = document.getElementById(itemData.id);
+    if (el) el.classList.add('selected');
+
+    // 置顶
+    const idx = state.items.indexOf(itemData);
+    if (idx > -1) {
+      state.items.splice(idx, 1);
+      state.items.push(itemData);
+      state.items.forEach((item, i) => {
+        const e = document.getElementById(item.id);
+        if (e) e.style.zIndex = i + 10;
       });
-      // 如果没有 isImage 标记的，找第一个有 material.map 的 Mesh
-      if (targetMesh === top || !targetMesh.material || !targetMesh.material.map) {
-        top.traverse(child => {
-          if (child.isMesh && child.material && child.material.map) targetMesh = child;
-        });
-      }
     }
 
-    if (targetMesh && targetMesh.material) {
-      if (targetMesh.material.map) {
-        targetMesh.material.map.dispose();
-      }
-      if (targetMesh.material.emissiveMap) {
-        targetMesh.material.emissiveMap.dispose();
-      }
-      targetMesh.material.map = newTex;
-      targetMesh.material.emissiveMap = newTex;
-      targetMesh.material.emissive = new THREE.Color(0xffffff);
-      targetMesh.material.emissiveIntensity = 0.85;
-      targetMesh.material.needsUpdate = true;
-      targetMesh.userData.composedTexture = newTex;
-    }
-    return;
+    showPropertyPanel(itemData);
   }
 
-  // 其他类型（卡片、立牌等）：沿用旧逻辑
-  const loader = new THREE.TextureLoader();
-  loader.load(imageUrl, (texture) => {
-    if (texture.colorSpace !== undefined) {
-      texture.colorSpace = THREE.SRGBColorSpace;
-    } else {
-      texture.encoding = THREE.sRGBEncoding;
+  function deselectItem() {
+    if (state.selectedItem) {
+      const el = document.getElementById(state.selectedItem.id);
+      if (el) el.classList.remove('selected');
     }
-    texture.magFilter = THREE.LinearFilter;
-    texture.minFilter = THREE.LinearMipmapLinearFilter;
-    texture.anisotropy = Math.max(maxAnisotropy, 8);
-    top.traverse(child => {
-      if (child.isMesh && child.userData.isImage && child.material) {
-        if (child.material.map) {
-          child.material.map.dispose();
+    state.selectedItem = null;
+    propertyPanel.style.display = 'none';
+  }
+
+  function showPropertyPanel(itemData) {
+    propertyPanel.style.display = 'block';
+    const cfg = itemData.config;
+
+    // 名称
+    $('item-name').value = itemData.name || '';
+    $('name-toggle').checked = itemData.showName;
+
+    // 颜色设置可见性
+    $('color-setting').style.display = cfg.hasImage || itemData.type === 'petal' || itemData.type === 'star' ? 'flex' : 'none';
+    $('item-color').value = rgbToHex(itemData.color);
+
+    // 大小
+    $('item-scale').value = itemData.scale;
+
+    // 旋转
+    $('item-rotation').value = itemData.rotation;
+
+    // 阴影设置
+    const s = itemData.shadow || {};
+    $('shadow-toggle').checked = s.enabled !== false;
+    $('shadow-color').value = rgbToHex(s.color || '#000000');
+    $('shadow-opacity').value = s.opacity !== undefined ? s.opacity : 0.7;
+    $('shadow-offsety').value = s.offsetY !== undefined ? s.offsetY : 4;
+    $('shadow-blur').value = s.blur !== undefined ? s.blur : 12;
+
+    // 阴影子设置显示/隐藏
+    document.querySelectorAll('.shadow-settings').forEach(el => {
+      if (s.enabled !== false) el.classList.remove('hidden');
+      else el.classList.add('hidden');
+    });
+  }
+
+  function rgbToHex(color) {
+    if (color.startsWith('#')) return color;
+    const match = color.match(/\d+/g);
+    if (!match) return '#ff6b9d';
+    return '#' + match.slice(0, 3).map(n => parseInt(n).toString(16).padStart(2, '0')).join('');
+  }
+
+  // ========== 物品操作 ==========
+  function deleteSelected() {
+    if (!state.selectedItem) return;
+    const id = state.selectedItem.id;
+    const el = document.getElementById(id);
+    if (el) el.remove();
+    state.items = state.items.filter(i => i.id !== id);
+    deselectItem();
+  }
+
+  function duplicateSelected() {
+    if (!state.selectedItem) return;
+    const src = state.selectedItem;
+    const newItem = createItem(src.type, {
+      x: src.x + 30,
+      y: src.y + 30,
+      scale: src.scale,
+      rotation: src.rotation,
+      color: src.color,
+      imageUrl: src.imageUrl
+    });
+    if (newItem) selectItem(newItem);
+  }
+
+  function applyImageToSelected(imageUrl) {
+    if (!state.selectedItem) return;
+    state.selectedItem.imageUrl = imageUrl;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) buildItemContent(el, state.selectedItem);
+  }
+
+  function updateSelectedColor(color) {
+    if (!state.selectedItem) return;
+    state.selectedItem.color = color;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) buildItemContent(el, state.selectedItem);
+  }
+
+  function updateSelectedScale(scale) {
+    if (!state.selectedItem) return;
+    state.selectedItem.scale = scale;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) updateItemStyle(el, state.selectedItem);
+  }
+
+  function updateSelectedRotation(deg) {
+    if (!state.selectedItem) return;
+    state.selectedItem.rotation = deg;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) updateItemStyle(el, state.selectedItem);
+  }
+
+  // ========== 阴影设置 ==========
+  function updateSelectedShadowEnabled(enabled) {
+    if (!state.selectedItem) return;
+    if (!state.selectedItem.shadow) state.selectedItem.shadow = {};
+    state.selectedItem.shadow.enabled = enabled;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) updateItemStyle(el, state.selectedItem);
+    // 显示/隐藏阴影子设置
+    document.querySelectorAll('.shadow-settings').forEach(el => {
+      if (enabled) el.classList.remove('hidden');
+      else el.classList.add('hidden');
+    });
+  }
+
+  function updateSelectedShadowColor(color) {
+    if (!state.selectedItem) return;
+    if (!state.selectedItem.shadow) state.selectedItem.shadow = {};
+    state.selectedItem.shadow.color = color;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) updateItemStyle(el, state.selectedItem);
+  }
+
+  function updateSelectedShadowOpacity(val) {
+    if (!state.selectedItem) return;
+    if (!state.selectedItem.shadow) state.selectedItem.shadow = {};
+    state.selectedItem.shadow.opacity = val;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) updateItemStyle(el, state.selectedItem);
+  }
+
+  function updateSelectedShadowOffsetY(val) {
+    if (!state.selectedItem) return;
+    if (!state.selectedItem.shadow) state.selectedItem.shadow = {};
+    state.selectedItem.shadow.offsetY = val;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) updateItemStyle(el, state.selectedItem);
+  }
+
+  function updateSelectedShadowBlur(val) {
+    if (!state.selectedItem) return;
+    if (!state.selectedItem.shadow) state.selectedItem.shadow = {};
+    state.selectedItem.shadow.blur = val;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) updateItemStyle(el, state.selectedItem);
+  }
+
+  // ========== 洞洞板设置 ==========
+  function setBoardColor(color) {
+    state.boardColor = color;
+    pegboard.style.backgroundColor = color;
+    document.documentElement.style.setProperty('--board-color', color);
+  }
+
+  function setHoleColor(color) {
+    state.holeColor = color;
+    document.documentElement.style.setProperty('--hole-color', color);
+  }
+
+  function setHoleSpacing(spacing) {
+    CONFIG.holeSpacing = spacing;
+    document.documentElement.style.setProperty('--hole-spacing', spacing + 'px');
+    generateHoles();
+    // 重新吸附所有物品
+    state.items.forEach(item => {
+      const snapped = snapToHole(item.x, item.y);
+      item.x = snapped.x;
+      item.y = snapped.y;
+      const el = document.getElementById(item.id);
+      if (el) updateItemStyle(el, item);
+    });
+  }
+
+  // ========== 孔洞开关 ==========
+  function setShowHoles(show) {
+    state.showHoles = show;
+    if (show) {
+      pegboard.classList.remove('no-holes');
+    } else {
+      pegboard.classList.add('no-holes');
+    }
+    // 显示/隐藏孔洞相关设置
+    document.querySelectorAll('.holes-settings').forEach(el => {
+      if (show) el.classList.remove('hidden');
+      else el.classList.add('hidden');
+    });
+  }
+
+  // ========== 外框设置 ==========
+  function updateFrameStyle() {
+    const { enabled, color, width } = state.frame;
+    if (!enabled || width === 0) {
+      pegboard.style.borderWidth = '0px';
+      pegboard.style.borderColor = 'transparent';
+      pegboard.style.borderStyle = 'solid';
+      pegboard.style.outline = 'none';
+      pegboard.style.boxShadow = 'none';
+    } else {
+      // 实心外框：外层粗边框 + 内层高光描边
+      pegboard.style.borderWidth = width + 'px';
+      pegboard.style.borderColor = color;
+      pegboard.style.borderStyle = 'solid';
+      // 用 outline 加一层内描边增加立体感
+      pegboard.style.outline = `2px solid ${lighten(color, 40)}`;
+      pegboard.style.outlineOffset = `-${width + 2}px`;
+      // 只保留投影阴影，去掉发光效果
+      pegboard.style.boxShadow = `
+        0 20px 50px rgba(0, 0, 0, 0.5),
+        inset 0 0 40px rgba(0, 0, 0, 0.15)
+      `;
+    }
+    // 显示/隐藏外框相关设置
+    document.querySelectorAll('.frame-settings').forEach(el => {
+      if (enabled) el.classList.remove('hidden');
+      else el.classList.add('hidden');
+    });
+  }
+
+  function setFrameEnabled(enabled) {
+    state.frame.enabled = enabled;
+    updateFrameStyle();
+  }
+
+  function setFrameColor(color) {
+    state.frame.color = color;
+    updateFrameStyle();
+  }
+
+  function setFrameWidth(width) {
+    state.frame.width = width;
+    updateFrameStyle();
+  }
+
+  // ========== 物品命名 ==========
+  function updateSelectedName(name) {
+    if (!state.selectedItem) return;
+    state.selectedItem.name = name;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) buildItemContent(el, state.selectedItem);
+  }
+
+  function updateSelectedShowName(show) {
+    if (!state.selectedItem) return;
+    state.selectedItem.showName = show;
+    const el = document.getElementById(state.selectedItem.id);
+    if (el) buildItemContent(el, state.selectedItem);
+  }
+
+  // ========== 保存/导入系统 ==========
+  const STORAGE_KEY = 'itawall_saves';
+  const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉易混淆字符
+
+  // 生成16位分享码
+  function generateCode() {
+    let code = '';
+    for (let i = 0; i < 16; i++) {
+      code += CODE_CHARS.charAt(Math.floor(Math.random() * CODE_CHARS.length));
+    }
+    return code;
+  }
+
+  // 序列化当前状态
+  function serializeState(name) {
+    return {
+      name: name || '未命名布局',
+      code: generateCode(),
+      createdAt: Date.now(),
+      data: {
+        items: state.items.map(item => ({
+          type: item.type,
+          x: item.x,
+          y: item.y,
+          scale: item.scale,
+          rotation: item.rotation,
+          color: item.color,
+          imageUrl: item.imageUrl,
+          name: item.name,
+          showName: item.showName,
+          shadow: item.shadow ? { ...item.shadow } : undefined
+        })),
+        boardColor: state.boardColor,
+        holeColor: state.holeColor,
+        showHoles: state.showHoles,
+        frame: { ...state.frame },
+        camera: { ...state.camera },
+        lighting: { ...state.lighting },
+        holeSpacing: CONFIG.holeSpacing,
+        snapEnabled: CONFIG.snapEnabled
+      }
+    };
+  }
+
+  // 保存到 localStorage
+  function saveLayout(name) {
+    const save = serializeState(name);
+    const saves = getSaves();
+    saves.unshift(save);
+    // 最多保存 20 个
+    if (saves.length > 20) saves.length = 20;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(saves));
+    return save;
+  }
+
+  // 获取所有保存
+  function getSaves() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // 按码查找
+  function findSaveByCode(code) {
+    const saves = getSaves();
+    return saves.find(s => s.code.toUpperCase() === code.toUpperCase());
+  }
+
+  // 删除保存
+  function deleteSave(code) {
+    const saves = getSaves().filter(s => s.code !== code);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(saves));
+  }
+
+  // 反序列化恢复状态
+  function applySaveData(saveData) {
+    const d = saveData.data;
+
+    // 清除现有物品
+    state.items.forEach(item => {
+      const el = document.getElementById(item.id);
+      if (el) el.remove();
+    });
+    state.items = [];
+    deselectItem();
+
+    // 恢复设置
+    if (d.boardColor !== undefined) {
+      state.boardColor = d.boardColor;
+      pegboard.style.backgroundColor = d.boardColor;
+      document.documentElement.style.setProperty('--board-color', d.boardColor);
+      $('board-color').value = d.boardColor;
+    }
+    if (d.holeColor !== undefined) {
+      state.holeColor = d.holeColor;
+      document.documentElement.style.setProperty('--hole-color', d.holeColor);
+      $('hole-color').value = d.holeColor;
+    }
+    if (d.showHoles !== undefined) {
+      setShowHoles(d.showHoles);
+      $('holes-toggle').checked = d.showHoles;
+    }
+    if (d.frame !== undefined) {
+      state.frame = { ...state.frame, ...d.frame };
+      updateFrameStyle();
+      $('frame-toggle').checked = state.frame.enabled;
+      $('frame-color').value = state.frame.color;
+      $('frame-width').value = state.frame.width;
+    }
+    if (d.camera !== undefined) {
+      state.camera = { ...state.camera, ...d.camera };
+      updateCameraTransform();
+      $('cam-rotatex').value = state.camera.rotateX;
+      $('cam-rotatey').value = state.camera.rotateY;
+      $('cam-zoom').value = state.camera.zoom;
+    }
+    if (d.lighting !== undefined) {
+      state.lighting = { ...state.lighting, ...d.lighting };
+      $('light-toggle').checked = state.lighting.enabled;
+      $('light-preset').value = state.lighting.preset || 'custom';
+      $('light-brightness').value = state.lighting.brightness;
+      $('light-contrast').value = state.lighting.contrast;
+      $('light-saturate').value = state.lighting.saturate;
+      $('light-tint').value = state.lighting.tint;
+      $('light-tint-amount').value = state.lighting.tintAmount;
+      document.querySelectorAll('.setting-row.light-settings').forEach(el => {
+        el.classList.toggle('hidden', !state.lighting.enabled);
+      });
+      applyLighting();
+    }
+    if (d.holeSpacing !== undefined) {
+      CONFIG.holeSpacing = d.holeSpacing;
+      document.documentElement.style.setProperty('--hole-spacing', d.holeSpacing + 'px');
+      $('hole-spacing').value = d.holeSpacing;
+      generateHoles();
+    }
+    if (d.snapEnabled !== undefined) {
+      CONFIG.snapEnabled = d.snapEnabled;
+      $('snap-toggle').checked = d.snapEnabled;
+    }
+
+    // 恢复物品
+    if (d.items && Array.isArray(d.items)) {
+      d.items.forEach(itemData => {
+        createItem(itemData.type, {
+          x: itemData.x,
+          y: itemData.y,
+          scale: itemData.scale,
+          rotation: itemData.rotation,
+          color: itemData.color,
+          imageUrl: itemData.imageUrl,
+          name: itemData.name,
+          showName: itemData.showName,
+          shadow: itemData.shadow,
+          skipSnap: true
+        });
+      });
+    }
+  }
+
+  // 渲染保存列表
+  function renderSavesList() {
+    const saves = getSaves();
+    const listEl = $('saves-list');
+    if (saves.length === 0) {
+      listEl.innerHTML = '<p class="save-hint">暂无保存记录</p>';
+      return;
+    }
+    listEl.innerHTML = saves.map(s => `
+      <div class="save-item">
+        <div class="save-item-info">
+          <span class="save-item-name">${escapeHtml(s.name)}</span>
+          <span class="save-item-code">${s.code} · ${formatDate(s.createdAt)}</span>
+        </div>
+        <div class="save-item-actions">
+          <button class="cyber-btn small" onclick="loadSave('${s.code}')">加载</button>
+          <button class="cyber-btn small" onclick="copySaveCode('${s.code}')">复制码</button>
+          <button class="cyber-btn small danger" onclick="removeSave('${s.code}')">删除</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function formatDate(ts) {
+    const d = new Date(ts);
+    return `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  // 全局函数供 HTML onclick 使用
+  window.loadSave = function(code) {
+    const save = findSaveByCode(code);
+    if (save) {
+      applySaveData(save);
+      closeImportModal();
+    }
+  };
+
+  window.copySaveCode = function(code) {
+    navigator.clipboard.writeText(code).then(() => {
+      alert('分享码已复制：' + code);
+    });
+  };
+
+  window.removeSave = function(code) {
+    if (confirm('确定要删除这个保存吗？')) {
+      deleteSave(code);
+      renderSavesList();
+    }
+  };
+
+  // ========== 弹窗控制 ==========
+  function openSaveModal() {
+    $('save-name').value = '';
+    document.querySelector('.save-code-section').style.display = 'none';
+    $('save-modal').style.display = 'flex';
+  }
+
+  function closeSaveModal() {
+    $('save-modal').style.display = 'none';
+  }
+
+  function openImportModal() {
+    $('import-code').value = '';
+    $('import-error').style.display = 'none';
+    renderSavesList();
+    $('import-modal').style.display = 'flex';
+  }
+
+  function closeImportModal() {
+    $('import-modal').style.display = 'none';
+  }
+
+  // ========== 截图 ==========
+  async function takeScreenshot() {
+    // 先取消选中（去掉选中框）
+    const wasSelected = state.selectedItem;
+    deselectItem();
+
+    // 临时隐藏 UI 组件（header、左右工具栏、footer）
+    const uiElements = [
+      document.querySelector('header.top-bar'),
+      document.querySelector('aside.toolbar.left'),
+      document.querySelector('aside.toolbar.right'),
+      document.querySelector('footer.bottom-bar')
+    ];
+    const savedDisplay = uiElements.map(el => el ? el.style.display : null);
+    uiElements.forEach(el => { if (el) el.style.display = 'none'; });
+
+    await new Promise(r => setTimeout(r, 300));
+
+    try {
+      // 截取整个页面（不含 UI），保留用户设置的倾斜角度
+      const canvas = await html2canvas(document.body, {
+        backgroundColor: getComputedStyle(document.body).backgroundColor || '#0d0221',
+        scale: 2,
+        useCORS: true,
+        logging: false
+      });
+
+      const dataUrl = canvas.toDataURL('image/png');
+      $('screenshot-preview').src = dataUrl;
+      $('screenshot-modal').style.display = 'flex';
+
+      $('btn-download').onclick = () => {
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = `赛博痛墙_${Date.now()}.png`;
+        a.click();
+      };
+    } catch (err) {
+      console.error('截图失败:', err);
+      alert('截图失败，请重试');
+    } finally {
+      // 恢复 UI 显示
+      uiElements.forEach((el, i) => {
+        if (el && savedDisplay[i] !== null) el.style.display = savedDisplay[i];
+        else if (el) el.style.display = '';
+      });
+    }
+
+    if (wasSelected) selectItem(wasSelected);
+  }
+
+  // ========== 初始化 ==========
+  function initUI() {
+    // 工具栏按钮
+    document.querySelectorAll('.item-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const type = btn.dataset.type;
+        if (!type) return; // 上传按钮没有 data-type，跳过
+        const item = createItem(type);
+        if (item) selectItem(item);
+      });
+    });
+
+    // 上传照片按钮
+    const btnUpload = $('btn-upload-item');
+    const fileInput = $('upload-item-file');
+    if (btnUpload && fileInput) {
+      btnUpload.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+          alert('请选择图片文件');
+          return;
         }
-        if (child.material.emissiveMap) {
-          child.material.emissiveMap.dispose();
+
+        // 先读取原图作为备用（抠图失败时使用）
+        const reader = new FileReader();
+        const originalDataUrl = await new Promise((resolve, reject) => {
+          reader.onload = (ev) => resolve(ev.target.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        showBgRemovalProgress();
+
+        try {
+          // 进行 AI 抠图
+          const bgRemovedDataUrl = await removeBgFromImage(originalDataUrl);
+          const item = createItem('custom', { imageUrl: bgRemovedDataUrl });
+          if (item) selectItem(item);
+        } catch (err) {
+          console.warn('抠图失败，使用原图:', err);
+          // 抠图失败时降级：直接使用原图
+          const item = createItem('custom', { imageUrl: originalDataUrl });
+          if (item) selectItem(item);
+          alert('抠图处理失败，已使用原图。\n原因: ' + (err.message || err));
+        } finally {
+          hideBgRemovalProgress();
         }
-        child.material.map = texture;
-        child.material.emissiveMap = texture;
-        child.material.emissive = new THREE.Color(0xffffff);
-        child.material.emissiveIntensity = 0.85;
-        child.material.needsUpdate = true;
+
+        // 重置 input 以便可以重复选择同一张图
+        fileInput.value = '';
+      });
+    }
+
+    // 点击空白处取消选中
+    pegboard.addEventListener('mousedown', (e) => {
+      if (e.target === pegboard || e.target.classList.contains('pegboard-hole')) {
+        deselectItem();
       }
     });
-  });
-}
 
-// ===== 画布点击 =====
-function onCanvasClick(event) {
-  if (_isDraggingNow) return;
+    // 重置
+    $('btn-reset-view').addEventListener('click', () => {
+      if (confirm('确定要清空所有物品吗？')) {
+        state.items.forEach(item => {
+          const el = document.getElementById(item.id);
+          if (el) el.remove();
+        });
+        state.items = [];
+        deselectItem();
+      }
+    });
 
-  const rect = renderer.domElement.getBoundingClientRect();
-  mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    // 保存布局
+    $('btn-save').addEventListener('click', openSaveModal);
+    $('btn-close-save').addEventListener('click', closeSaveModal);
+    $('btn-confirm-save').addEventListener('click', () => {
+      const name = $('save-name').value.trim() || '未命名布局';
+      const save = saveLayout(name);
+      $('save-code-text').textContent = save.code;
+      document.querySelector('.save-code-section').style.display = 'block';
+    });
+    $('btn-copy-code').addEventListener('click', () => {
+      const code = $('save-code-text').textContent;
+      navigator.clipboard.writeText(code).then(() => {
+        const btn = $('btn-copy-code');
+        const original = btn.textContent;
+        btn.textContent = '已复制!';
+        setTimeout(() => btn.textContent = original, 1500);
+      });
+    });
 
-  raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObjects(decorations, true);
+    // 导入布局
+    $('btn-import').addEventListener('click', openImportModal);
+    $('btn-close-import').addEventListener('click', closeImportModal);
+    $('btn-confirm-import').addEventListener('click', () => {
+      const code = $('import-code').value.trim().toUpperCase();
+      if (!code) {
+        $('import-error').style.display = 'block';
+        $('import-error').textContent = '请输入分享码';
+        return;
+      }
+      const save = findSaveByCode(code);
+      if (!save) {
+        $('import-error').style.display = 'block';
+        $('import-error').textContent = '分享码无效或未找到（仅同设备同浏览器可用）';
+        return;
+      }
+      applySaveData(save);
+      closeImportModal();
+    });
+    $('import-code').addEventListener('input', () => {
+      $('import-error').style.display = 'none';
+    });
 
-  if (intersects.length > 0) {
-    let obj = intersects[0].object;
-    while (obj.parent && !decorations.includes(obj)) {
-      obj = obj.parent;
-    }
-    if (decorations.includes(obj)) {
-      selectedObject = obj;
-      highlightObject(obj);
-      updatePropertyPanel(obj);
-    }
+    // 截图
+    $('btn-screenshot').addEventListener('click', takeScreenshot);
+
+    // 关闭弹窗
+    $('btn-close-modal').addEventListener('click', () => {
+      $('screenshot-modal').style.display = 'none';
+    });
+
+    // 属性面板：名称
+    $('item-name').addEventListener('input', (e) => updateSelectedName(e.target.value));
+    $('name-toggle').addEventListener('change', (e) => updateSelectedShowName(e.target.checked));
+
+    // 属性面板：上传图片
+    $('upload-image').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => applyImageToSelected(ev.target.result);
+      reader.readAsDataURL(file);
+      e.target.value = '';
+    });
+
+    // 属性面板：颜色
+    $('item-color').addEventListener('input', (e) => updateSelectedColor(e.target.value));
+
+    // 属性面板：大小
+    $('item-scale').addEventListener('input', (e) => updateSelectedScale(parseFloat(e.target.value)));
+
+    // 属性面板：旋转
+    $('item-rotation').addEventListener('input', (e) => updateSelectedRotation(parseFloat(e.target.value)));
+
+    // 属性面板：阴影设置
+    $('shadow-toggle').addEventListener('change', (e) => updateSelectedShadowEnabled(e.target.checked));
+    $('shadow-color').addEventListener('input', (e) => updateSelectedShadowColor(e.target.value));
+    $('shadow-opacity').addEventListener('input', (e) => updateSelectedShadowOpacity(parseFloat(e.target.value)));
+    $('shadow-offsety').addEventListener('input', (e) => updateSelectedShadowOffsetY(parseInt(e.target.value)));
+    $('shadow-blur').addEventListener('input', (e) => updateSelectedShadowBlur(parseInt(e.target.value)));
+
+    // 属性面板：复制/删除
+    $('btn-duplicate').addEventListener('click', duplicateSelected);
+    $('btn-delete').addEventListener('click', deleteSelected);
+
+    // 洞洞板设置
+    $('board-color').addEventListener('input', (e) => setBoardColor(e.target.value));
+    $('holes-toggle').addEventListener('change', (e) => setShowHoles(e.target.checked));
+    $('hole-color').addEventListener('input', (e) => setHoleColor(e.target.value));
+    $('hole-spacing').addEventListener('input', (e) => setHoleSpacing(parseInt(e.target.value)));
+    $('snap-toggle').addEventListener('change', (e) => {
+      CONFIG.snapEnabled = e.target.checked;
+      if (!CONFIG.snapEnabled) clearSnapHints();
+    });
+
+    // 外框设置
+    $('frame-toggle').addEventListener('change', (e) => setFrameEnabled(e.target.checked));
+    $('frame-color').addEventListener('input', (e) => setFrameColor(e.target.value));
+    $('frame-width').addEventListener('input', (e) => setFrameWidth(parseInt(e.target.value)));
+
+    // 摄像头控制
+    $('cam-rotatex').addEventListener('input', (e) => setCameraRotateX(parseFloat(e.target.value)));
+    $('cam-rotatey').addEventListener('input', (e) => setCameraRotateY(parseFloat(e.target.value)));
+    $('cam-zoom').addEventListener('input', (e) => setCameraZoom(parseFloat(e.target.value)));
+    $('btn-reset-cam').addEventListener('click', resetCamera);
+
+    // 光效设置
+    $('light-toggle').addEventListener('change', (e) => setLightEnabled(e.target.checked));
+    $('light-preset').addEventListener('change', (e) => setLightPreset(e.target.value));
+    $('light-brightness').addEventListener('input', (e) => setLightBrightness(e.target.value));
+    $('light-contrast').addEventListener('input', (e) => setLightContrast(e.target.value));
+    $('light-saturate').addEventListener('input', (e) => setLightSaturate(e.target.value));
+    $('light-tint').addEventListener('input', (e) => setLightTint(e.target.value));
+    $('light-tint-amount').addEventListener('input', (e) => setLightTintAmount(e.target.value));
+
+    // 右键拖拽旋转视角
+    const container = $('pegboard-container');
+    container.addEventListener('contextmenu', (e) => e.preventDefault());
+    container.addEventListener('mousedown', (e) => {
+      if (e.button === 2) { // 右键
+        e.preventDefault();
+        state.cameraDragging = {
+          startX: e.clientX,
+          startY: e.clientY,
+          startRotX: state.camera.rotateX,
+          startRotY: state.camera.rotateY
+        };
+      }
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!state.cameraDragging) return;
+      const dx = e.clientX - state.cameraDragging.startX;
+      const dy = e.clientY - state.cameraDragging.startY;
+      const newRotY = state.cameraDragging.startRotY + dx * 0.3;
+      const newRotX = state.cameraDragging.startRotX - dy * 0.3;
+      setCameraRotateX(newRotX);
+      setCameraRotateY(newRotY);
+      $('cam-rotatex').value = state.camera.rotateX;
+      $('cam-rotatey').value = state.camera.rotateY;
+    });
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 2) {
+        state.cameraDragging = null;
+      }
+    });
+
+    // 键盘快捷键
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        deleteSelected();
+      }
+      if (e.key === 'd' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        duplicateSelected();
+      }
+      if (e.key === 'Escape') {
+        deselectItem();
+      }
+    });
   }
-}
 
-// ===== 窗口调整 =====
-function onWindowResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-}
+  // ========== 启动 ==========
+  function start() {
+    initPegboard();
+    initUI();
 
-// ===== 截图 =====
-let screenshotDataUrl = null;
+    // 初始化外框样式
+    updateFrameStyle();
 
-function takeScreenshot() {
-  // 渲染一次最新的画面
-  renderer.render(scene, camera);
+    // 初始化光效
+    setLightPreset(state.lighting.preset);
+    applyLighting();
 
-  // 使用 renderer 的 domElement 直接导出
-  const dataUrl = renderer.domElement.toDataURL('image/png');
-  screenshotDataUrl = dataUrl;
+    // 放一些示例物品
+    setTimeout(() => {
+      createItem('badge',  { x: 180, y: 150, color: '#ff6b9d' });
+      createItem('polaroid', { x: 320, y: 200, color: '#f5f0e6' });
+      createItem('card',    { x: 500, y: 180, color: '#4fc3f7' });
+      createItem('petal',   { x: 140, y: 350, color: '#ff80ab' });
+      createItem('star',    { x: 620, y: 380, color: '#ffeb3b' });
+      createItem('stand',   { x: 650, y: 200, color: '#ffd54f' });
+      createItem('badge',   { x: 420, y: 400, color: '#b388ff' });
 
-  document.getElementById('screenshot-preview').src = dataUrl;
-  document.getElementById('screenshot-modal').style.display = 'flex';
-}
-
-function downloadScreenshot() {
-  if (!screenshotDataUrl) return;
-  const link = document.createElement('a');
-  link.download = 'cyber-ita-wall-' + Date.now() + '.png';
-  link.href = screenshotDataUrl;
-  link.click();
-}
-
-// ===== 动画循环 =====
-function animate() {
-  requestAnimationFrame(animate);
-
-  // 轻微的灯光浮动效果
-  const time = Date.now() * 0.001;
-  if (fillLight) {
-    fillLight.intensity = 0.6 + Math.sin(time * 1.5) * 0.2;
-  }
-  if (rimLight) {
-    rimLight.intensity = 0.5 + Math.cos(time * 1.2) * 0.15;
+      // 隐藏加载
+      $('loading').classList.add('hidden');
+      setTimeout(() => { $('loading').style.display = 'none'; }, 600);
+    }, 300);
   }
 
-  orbitControls.update();
-  renderer.render(scene, camera);
-}
+  // 暴露调试函数到全局
+  window.__itawall = {
+    openSaveModal,
+    closeSaveModal,
+    openImportModal,
+    closeImportModal,
+    saveLayout,
+    getSaves,
+    findSaveByCode,
+    applySaveData,
+    state
+  };
 
-// ===== 启动 =====
-init();
+  // DOM 就绪后启动
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+  } else {
+    start();
+  }
+})();
